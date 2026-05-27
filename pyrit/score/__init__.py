@@ -62,9 +62,10 @@ from pyrit.score.true_false.true_false_inverter_scorer import TrueFalseInverterS
 from pyrit.score.true_false.true_false_score_aggregator import TrueFalseAggregatorFunc, TrueFalseScoreAggregator
 from pyrit.score.true_false.true_false_scorer import TrueFalseScorer
 from pyrit.score.true_false.wordlist_scorer import (
-    OfcomCategory,
+    PredefinedWordList,
     WordListMatchMode,
     WordListScorer,
+    load_predefined_wordlist,
 )
 
 if TYPE_CHECKING:
@@ -143,9 +144,9 @@ __all__ = [
     "ObjectiveHumanLabeledEntry",
     "ObjectiveScorerEvaluator",
     "ObjectiveScorerMetrics",
-    "OfcomCategory",
     "PlagiarismMetric",
     "PlagiarismScorer",
+    "PredefinedWordList",
     "PromptShieldScorer",
     "QuestionAnswerScorer",
     "RegexScorer",
@@ -181,4 +182,5 @@ __all__ = [
     "VideoTrueFalseScorer",
     "WordListMatchMode",
     "WordListScorer",
+    "load_predefined_wordlist",
 ]

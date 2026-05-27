@@ -8,12 +8,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
+import pyrit.score.true_false.wordlist_scorer as wordlist_module
 from pyrit.score import (
-    OfcomCategory,
+    PredefinedWordList,
     TrueFalseCompositeScorer,
     TrueFalseScoreAggregator,
     WordListMatchMode,
     WordListScorer,
+    load_predefined_wordlist,
 )
 
 _LDNOOBW_SAMPLE = "bitch\nasshole\nf**k\nass\n"
@@ -109,9 +111,9 @@ async def test_terms_sorted_longest_first(patch_central_database):
 
 
 async def test_category_propagates_into_score(patch_central_database):
-    scorer = WordListScorer(terms=["foo"], category="ofcom-raceethnic")
+    scorer = WordListScorer(terms=["foo"], category="ofcom_raceethnic")
     score = (await scorer.score_text_async(text="this has foo in it"))[0]
-    assert score.score_category == ["ofcom-raceethnic"]
+    assert score.score_category == ["ofcom_raceethnic"]
 
 
 async def test_rationale_names_the_category(patch_central_database):
@@ -160,16 +162,14 @@ async def test_composite_or_across_two_wordlists(patch_central_database):
     assert neither.get_value() is False
 
 
-# ---------- Fetch + cache + classmethod loader tests ----------
+# ---------- load_predefined_wordlist fetch + cache + parse tests ----------
 
 
 @pytest.fixture
-def lexicon_cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def lexicon_cache_dir(tmp_path: Path):
     """Redirect lexicon downloads into a per-test temp directory."""
-    import pyrit.score.true_false.wordlist_scorer as module
-
-    monkeypatch.setattr(module, "DB_DATA_PATH", tmp_path)
-    return tmp_path / "lexicons"
+    with patch.object(wordlist_module, "DB_DATA_PATH", tmp_path):
+        yield tmp_path / "lexicons"
 
 
 def _mock_response(text: str) -> MagicMock:
@@ -179,84 +179,88 @@ def _mock_response(text: str) -> MagicMock:
     return response
 
 
-async def test_from_ldnoobw_en_fetches_and_scores(patch_central_database, lexicon_cache_dir):
-    with patch("requests.get", return_value=_mock_response(_LDNOOBW_SAMPLE)) as mock_get:
-        scorer = WordListScorer.from_ldnoobw_en()
-        positive = (await scorer.score_text_async(text="you bitch"))[0]
-        negative = (await scorer.score_text_async(text="hello there"))[0]
+def test_load_ldnoobw_en_fetches_terms(lexicon_cache_dir):
+    with patch.object(wordlist_module.requests, "get", return_value=_mock_response(_LDNOOBW_SAMPLE)) as mock_get:
+        terms = load_predefined_wordlist(wordlist=PredefinedWordList.LDNOOBW_EN)
 
-    assert positive.get_value() is True
-    assert negative.get_value() is False
-    assert positive.score_category == ["ldnoobw"]
+    assert "bitch" in terms
+    assert "asshole" in terms
+    assert "f**k" in terms
+    assert "" not in terms
     mock_get.assert_called_once()
-    assert mock_get.call_args.args[0] == WordListScorer._LDNOOBW_EN_URL
+    assert mock_get.call_args.args[0] == wordlist_module._LDNOOBW_EN_URL
 
 
-async def test_from_slurs_en_fetches_and_scores(patch_central_database, lexicon_cache_dir):
-    with patch("requests.get", return_value=_mock_response(_SLURS_SAMPLE)) as mock_get:
-        scorer = WordListScorer.from_slurs_en()
-        positive = (await scorer.score_text_async(text="they're a Banderite"))[0]
-        negative = (await scorer.score_text_async(text="ordinary sentence"))[0]
+def test_load_reclaimed_slurs_en_strips_whitespace(lexicon_cache_dir):
+    with patch.object(wordlist_module.requests, "get", return_value=_mock_response(_SLURS_SAMPLE)) as mock_get:
+        terms = load_predefined_wordlist(wordlist=PredefinedWordList.RECLAIMED_SLURS_EN)
 
-    assert positive.get_value() is True
-    assert negative.get_value() is False
-    assert positive.score_category == ["slurs"]
+    assert "Banderite" in terms
+    assert "Boche" in terms  # trailing whitespace stripped
     mock_get.assert_called_once()
 
 
-async def test_from_ofcom_category_filters_strength(patch_central_database, lexicon_cache_dir):
-    with patch("requests.get", return_value=_mock_response(_OFCOM_SAMPLE)):
-        scorer = WordListScorer.from_ofcom_category(category=OfcomCategory.GENERAL, min_strength=2)
-        crap = (await scorer.score_text_async(text="that was crap"))[0]
-        shit = (await scorer.score_text_async(text="that was shit"))[0]
+def test_load_ofcom_general_filters_by_strength(lexicon_cache_dir):
+    with patch.object(wordlist_module.requests, "get", return_value=_mock_response(_OFCOM_SAMPLE)):
+        terms = load_predefined_wordlist(wordlist=PredefinedWordList.OFCOM_GENERAL, ofcom_min_strength=2)
 
-    # "Crap" has strength 1, below the min_strength=2 cutoff -> should NOT fire.
-    assert crap.get_value() is False
-    # "Shit" has strength 2 -> should fire.
-    assert shit.get_value() is True
-    assert shit.score_category == ["ofcom-general"]
-
-
-async def test_from_ofcom_category_other_category_excluded(patch_central_database, lexicon_cache_dir):
-    """raceethnic terms must not appear in the general scorer."""
-    with patch("requests.get", return_value=_mock_response(_OFCOM_SAMPLE)):
-        scorer = WordListScorer.from_ofcom_category(category=OfcomCategory.GENERAL)
-        race_term = (await scorer.score_text_async(text="someslur"))[0]
-
-    assert race_term.get_value() is False
+    assert "Shit" in terms
+    assert "Bullshit" in terms
+    assert "Fuck" in terms
+    assert "Crap" not in terms  # strength 1
+    assert "Shag" not in terms  # different category
+    assert "SomeSlur" not in terms  # different category
 
 
-async def test_from_ofcom_raises_when_no_terms_pass_filter(patch_central_database, lexicon_cache_dir):
-    with patch("requests.get", return_value=_mock_response(_OFCOM_SAMPLE)):
+def test_load_ofcom_higher_strength_excludes_medium(lexicon_cache_dir):
+    with patch.object(wordlist_module.requests, "get", return_value=_mock_response(_OFCOM_SAMPLE)):
+        terms = load_predefined_wordlist(wordlist=PredefinedWordList.OFCOM_GENERAL, ofcom_min_strength=4)
+
+    assert terms == ["Fuck"]
+
+
+def test_load_ofcom_raises_when_no_terms_pass_filter(lexicon_cache_dir):
+    with patch.object(wordlist_module.requests, "get", return_value=_mock_response(_OFCOM_SAMPLE)):
         with pytest.raises(ValueError, match="No Ofcom terms"):
-            WordListScorer.from_ofcom_category(
-                category=OfcomCategory.RACEETHNIC,
-                min_strength=4,
-            )
+            load_predefined_wordlist(wordlist=PredefinedWordList.OFCOM_RACEETHNIC, ofcom_min_strength=4)
 
 
-async def test_cached_lexicon_skips_second_fetch(patch_central_database, lexicon_cache_dir):
-    """Second call to from_ldnoobw_en() must hit the cache, not the network."""
-    with patch("requests.get", return_value=_mock_response(_LDNOOBW_SAMPLE)) as mock_get:
-        WordListScorer.from_ldnoobw_en()
-        WordListScorer.from_ldnoobw_en()
+def test_cached_lexicon_skips_second_fetch(lexicon_cache_dir):
+    """Second call must hit the cache, not the network."""
+    with patch.object(wordlist_module.requests, "get", return_value=_mock_response(_LDNOOBW_SAMPLE)) as mock_get:
+        load_predefined_wordlist(wordlist=PredefinedWordList.LDNOOBW_EN)
+        load_predefined_wordlist(wordlist=PredefinedWordList.LDNOOBW_EN)
 
     assert mock_get.call_count == 1
 
 
-async def test_http_error_propagates(patch_central_database, lexicon_cache_dir):
+def test_http_error_propagates(lexicon_cache_dir):
     failing_response = MagicMock(spec=requests.Response)
     failing_response.raise_for_status.side_effect = requests.HTTPError("boom")
-    with patch("requests.get", return_value=failing_response):
+    with patch.object(wordlist_module.requests, "get", return_value=failing_response):
         with pytest.raises(requests.HTTPError, match="boom"):
-            WordListScorer.from_ldnoobw_en()
+            load_predefined_wordlist(wordlist=PredefinedWordList.LDNOOBW_EN)
+
+
+async def test_loaded_wordlist_passes_into_scorer(patch_central_database, lexicon_cache_dir):
+    """End-to-end: fetch a predefined list, construct a scorer, score text."""
+    with patch.object(wordlist_module.requests, "get", return_value=_mock_response(_LDNOOBW_SAMPLE)):
+        terms = load_predefined_wordlist(wordlist=PredefinedWordList.LDNOOBW_EN)
+
+    scorer = WordListScorer(terms=terms, category="profanity")
+    hit = (await scorer.score_text_async(text="you bitch"))[0]
+    miss = (await scorer.score_text_async(text="hello there"))[0]
+
+    assert hit.get_value() is True
+    assert miss.get_value() is False
+    assert hit.score_category == ["profanity"]
 
 
 # ---------- Pure-function tests for helpers (no network, no memory) ----------
 
 
 def test_build_pattern_word_mode_uses_word_boundaries():
-    pattern = WordListScorer._build_pattern(
+    pattern = wordlist_module._build_pattern(
         terms=["foo", "bar"],
         match_mode=WordListMatchMode.WORD,
         case_sensitive=False,
@@ -270,7 +274,7 @@ def test_build_pattern_word_mode_uses_word_boundaries():
 
 
 def test_build_pattern_substring_mode_omits_word_boundaries():
-    pattern = WordListScorer._build_pattern(
+    pattern = wordlist_module._build_pattern(
         terms=["foo"],
         match_mode=WordListMatchMode.SUBSTRING,
         case_sensitive=True,
@@ -282,9 +286,9 @@ def test_build_pattern_substring_mode_omits_word_boundaries():
 
 
 def test_parse_ofcom_tsv_filters_by_category_and_strength():
-    terms = WordListScorer._parse_ofcom_tsv(
+    terms = wordlist_module._parse_ofcom_tsv(
         tsv_text=_OFCOM_SAMPLE,
-        category=OfcomCategory.GENERAL,
+        category_key="general",
         min_strength=2,
     )
     assert "Shit" in terms

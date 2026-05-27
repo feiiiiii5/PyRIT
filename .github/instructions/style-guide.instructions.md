@@ -161,6 +161,11 @@ Within the same package, import from the specific file to avoid circular imports
 - Include "Raises" section when applicable
 - Use triple quotes even for single-line docstrings
 - Do not include example calls for how it's used
+- Use plain Markdown-style backticks for cross-references (e.g. ``RegexScorer``
+  or `RegexScorer`). Do NOT use Sphinx interpreted-text roles such as
+  ``:meth:``, ``:class:``, ``:func:``, ``:py:obj:`` — the project does not
+  render docstrings through Sphinx, so the roles show up unprocessed in
+  IDE hovers and `help()` output.
 
 ```python
 def calculate_score(

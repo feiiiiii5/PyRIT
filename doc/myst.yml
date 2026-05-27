@@ -168,7 +168,8 @@ project:
             - file: code/scoring/insecure_code_scorer.ipynb
             - file: code/scoring/persuasion_full_conversation_scorer.ipynb
             - file: code/scoring/prompt_shield_scorer.ipynb
-            - file: code/scoring/generic_scorers.ipynb
+            - file: code/scoring/wordlist_scorer.ipynb
+        - file: code/scoring/generic_scorers.ipynb
         - file: code/memory/0_memory.md
           children:
             - file: code/memory/1_sqlite_memory.ipynb
