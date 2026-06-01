@@ -18,6 +18,10 @@ Caveats:
 - The Ofcom "general" category at strength >= 2 includes mild words like
   "Bullshit" that are about tone, not safety. Pass a higher
   ``ofcom_min_strength`` for stricter filtering.
+- The Surge AI profanity list was not published with an explicit license by
+  Surge AI. PyRIT fetches it from NVIDIA/garak's mirror at a pinned commit
+  rather than redistributing it. Downstream use is the caller's
+  responsibility.
 """
 
 import csv
@@ -55,6 +59,7 @@ _GARAK_OFCOM_URL = (
 _GARAK_SLURS_URL = (
     f"https://raw.githubusercontent.com/NVIDIA/garak/{_GARAK_COMMIT_SHA}/garak/data/slursreclaimedslurs.txt"
 )
+_GARAK_PROFANITY_URL = f"https://raw.githubusercontent.com/NVIDIA/garak/{_GARAK_COMMIT_SHA}/garak/data/profanity_en.csv"
 
 _HTTP_TIMEOUT_SECONDS = 30
 
@@ -70,9 +75,14 @@ class PredefinedWordList(enum.Enum):
     """
     Curated wordlists that ship with PyRIT as `load_predefined_wordlist` inputs.
 
-    Each entry identifies the upstream source and (for Ofcom) the category
-    bucket. PyRIT does not redistribute the data; the loader fetches it from
-    a pinned commit on first use.
+    Each entry identifies the upstream source and (for Ofcom and Surge) the
+    category bucket. PyRIT does not redistribute the data; the loader fetches
+    it from a pinned commit on first use.
+
+    The ``SURGE_*_EN`` entries are sourced from Surge AI's profanity list as
+    mirrored in NVIDIA/garak. Surge AI did not publish the file with an
+    explicit license. PyRIT only ships the loader code; downstream use of
+    the fetched data is the caller's responsibility.
     """
 
     LDNOOBW_EN = "ldnoobw_en"
@@ -83,6 +93,17 @@ class PredefinedWordList(enum.Enum):
     OFCOM_MENTALHEALTH = "ofcom_mentalhealth"
     OFCOM_RACEETHNIC = "ofcom_raceethnic"
     RECLAIMED_SLURS_EN = "reclaimed_slurs_en"
+    SURGE_SEXUAL_EN = "surge_sexual_en"
+    SURGE_BODILY_FLUIDS_EN = "surge_bodily_fluids_en"
+    SURGE_SEXUAL_ORIENTATION_GENDER_EN = "surge_sexual_orientation_gender_en"
+    SURGE_RACIAL_ETHNIC_SLURS_EN = "surge_racial_ethnic_slurs_en"
+    SURGE_MENTAL_DISABILITY_EN = "surge_mental_disability_en"
+    SURGE_PHYSICAL_DISABILITY_EN = "surge_physical_disability_en"
+    SURGE_PHYSICAL_ATTRIBUTES_EN = "surge_physical_attributes_en"
+    SURGE_ANIMAL_REFERENCES_EN = "surge_animal_references_en"
+    SURGE_RELIGIOUS_OFFENSE_EN = "surge_religious_offense_en"
+    SURGE_POLITICAL_EN = "surge_political_en"
+    SURGE_OTHER_INSULTS_EN = "surge_other_insults_en"
 
 
 _OFCOM_CATEGORY_KEY: dict[PredefinedWordList, str] = {
@@ -92,6 +113,21 @@ _OFCOM_CATEGORY_KEY: dict[PredefinedWordList, str] = {
     PredefinedWordList.OFCOM_SEXGENDER: "sexgender",
     PredefinedWordList.OFCOM_MENTALHEALTH: "mentalhealth",
     PredefinedWordList.OFCOM_RACEETHNIC: "raceethnic",
+}
+
+
+_SURGE_CATEGORY_KEY: dict[PredefinedWordList, str] = {
+    PredefinedWordList.SURGE_SEXUAL_EN: "sexual anatomy / sexual acts",
+    PredefinedWordList.SURGE_BODILY_FLUIDS_EN: "bodily fluids / excrement",
+    PredefinedWordList.SURGE_SEXUAL_ORIENTATION_GENDER_EN: "sexual orientation / gender",
+    PredefinedWordList.SURGE_RACIAL_ETHNIC_SLURS_EN: "racial / ethnic slurs",
+    PredefinedWordList.SURGE_MENTAL_DISABILITY_EN: "mental disability",
+    PredefinedWordList.SURGE_PHYSICAL_DISABILITY_EN: "physical disability",
+    PredefinedWordList.SURGE_PHYSICAL_ATTRIBUTES_EN: "physical attributes",
+    PredefinedWordList.SURGE_ANIMAL_REFERENCES_EN: "animal references",
+    PredefinedWordList.SURGE_RELIGIOUS_OFFENSE_EN: "religious offense",
+    PredefinedWordList.SURGE_POLITICAL_EN: "political",
+    PredefinedWordList.SURGE_OTHER_INSULTS_EN: "other / general insult",
 }
 
 
@@ -188,15 +224,16 @@ def load_predefined_wordlist(
     *,
     wordlist: PredefinedWordList,
     ofcom_min_strength: int = 2,
+    surge_min_severity: float = 1.0,
 ) -> list[str]:
     """
     Fetch and return the terms for a `PredefinedWordList`.
 
     On first use the lexicon is downloaded from its upstream maintainer
-    (Shutterstock for LDNOOBW, NVIDIA's garak repo for Ofcom and the
-    reclaimed-slurs seed) and cached under ``DB_DATA_PATH / "lexicons"``.
-    Subsequent calls read from the cache. Upstream commit SHAs are pinned
-    so fetches are reproducible.
+    (Shutterstock for LDNOOBW, NVIDIA's garak repo for Ofcom, the
+    reclaimed-slurs seed, and the Surge AI profanity mirror) and cached
+    under ``DB_DATA_PATH / "lexicons"``. Subsequent calls read from the
+    cache. Upstream commit SHAs are pinned so fetches are reproducible.
 
     Pass the returned list directly into `WordListScorer` along with a
     category label.
@@ -207,13 +244,19 @@ def load_predefined_wordlist(
             2=medium, 3=strong, 4=strongest) to include from the Ofcom
             audience research. Defaults to 2, mirroring garak's runtime
             filter. Ignored for non-Ofcom lists.
+        surge_min_severity (float): Minimum severity rating (1.0=mild,
+            2.0=strong, 3.0=severe; the column stores a mean of 5 ratings
+            so values are floats) to include from the Surge AI profanity
+            list. Defaults to 1.0 (no filtering), mirroring garak's loader.
+            Ignored for non-Surge lists.
 
     Returns:
         list[str]: The terms, with whitespace stripped and blanks dropped.
         Order is not significant; `WordListScorer` re-sorts internally.
 
     Raises:
-        ValueError: If an Ofcom list ends up empty after the strength filter.
+        ValueError: If an Ofcom or Surge list ends up empty after the
+            strength/severity filter.
         requests.HTTPError: If the upstream fetch returns non-2xx.
     """
     if wordlist is PredefinedWordList.LDNOOBW_EN:
@@ -229,6 +272,23 @@ def load_predefined_wordlist(
             cache_filename=f"slurs-en-{_short_sha(_GARAK_COMMIT_SHA)}.txt",
         )
         return _read_term_lines(cache_path)
+
+    if wordlist in _SURGE_CATEGORY_KEY:
+        surge_key = _SURGE_CATEGORY_KEY[wordlist]
+        cache_path = _fetch_lexicon(
+            url=_GARAK_PROFANITY_URL,
+            cache_filename=f"surge-profanity-en-{_short_sha(_GARAK_COMMIT_SHA)}.csv",
+        )
+        terms = _parse_surge_csv(
+            csv_text=cache_path.read_text(encoding="utf-8"),
+            category_key=surge_key,
+            min_severity=surge_min_severity,
+        )
+        if not terms:
+            raise ValueError(
+                f"No Surge terms remain for {wordlist.value} with surge_min_severity={surge_min_severity}."
+            )
+        return terms
 
     ofcom_key = _OFCOM_CATEGORY_KEY[wordlist]
     cache_path = _fetch_lexicon(
@@ -320,6 +380,45 @@ def _parse_ofcom_tsv(
         except ValueError:
             continue
         if strength >= min_strength:
+            terms.append(term)
+    return terms
+
+
+def _parse_surge_csv(
+    *,
+    csv_text: str,
+    category_key: str,
+    min_severity: float,
+) -> list[str]:
+    """
+    Parse garak's mirror of Surge AI's profanity CSV.
+
+    A row is included if any of its three category slots (``category_1``,
+    ``category_2``, ``category_3``) equals ``category_key`` and its
+    ``severity_rating`` is at or above ``min_severity``.
+
+    Returns:
+        list[str]: Terms whose row matches ``category_key`` at the
+        requested severity.
+    """
+    reader = csv.DictReader(io.StringIO(csv_text))
+    terms: list[str] = []
+    for row in reader:
+        term = (row.get("text") or "").strip()
+        if not term:
+            continue
+        categories = {
+            (row.get("category_1") or "").strip(),
+            (row.get("category_2") or "").strip(),
+            (row.get("category_3") or "").strip(),
+        }
+        if category_key not in categories:
+            continue
+        try:
+            severity = float(row.get("severity_rating") or "0")
+        except ValueError:
+            continue
+        if severity >= min_severity:
             terms.append(term)
     return terms
 

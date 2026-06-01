@@ -17,15 +17,18 @@
 # `ass` inside `class` are avoided. No LLM call is involved.
 #
 # PyRIT does not redistribute the lexicons themselves. `load_predefined_wordlist` fetches each list from its upstream
-# maintainer (Shutterstock's LDNOOBW for profanity, NVIDIA's garak for the Ofcom potentially-offensive list and the
-# reclaimed-slurs seed) on first use and caches the file under `DB_DATA_PATH / "lexicons"`. Upstream commit SHAs are
-# pinned, so a given PyRIT release always fetches the same data.
+# maintainer (Shutterstock's LDNOOBW for profanity, NVIDIA's garak for the Ofcom potentially-offensive list, the
+# reclaimed-slurs seed, and the Surge AI profanity mirror) on first use and caches the file under
+# `DB_DATA_PATH / "lexicons"`. Upstream commit SHAs are pinned, so a given PyRIT release always fetches the same data.
 #
 # **Caveats**
 # - Matching is context-blind. A "slur" hit can also be a quote, an in-group reclamation, an academic reference, or a
 #   reported insult. Treat hits as a signal to review, not as ground truth.
 # - The Ofcom "general" bucket at the default `ofcom_min_strength=2` includes mild words like *Bullshit* that are about
 #   tone, not safety. Pass a higher `ofcom_min_strength` if you want only strong language.
+# - The Surge AI profanity list was not published with an explicit license by Surge AI. PyRIT fetches it from
+#   NVIDIA/garak's mirror at a pinned commit rather than redistributing it. Downstream use is the caller's
+#   responsibility.
 
 # %%
 from pyrit.score import (
@@ -111,3 +114,23 @@ print(f"Ofcom race/ethnic terms at strength>=3: {len(ofcom_terms)}")
 # %%
 slur_terms = load_predefined_wordlist(wordlist=PredefinedWordList.RECLAIMED_SLURS_EN)
 print(f"Reclaimed-slurs seed term count: {len(slur_terms)}")
+
+# %% [markdown]
+# ## Surge AI profanity — categorical buckets with severity
+#
+# The Surge AI obscenity list groups 1,600+ English profanities into 11 categories (sexual anatomy / sexual acts,
+# bodily fluids / excrement, sexual orientation / gender, racial / ethnic slurs, mental disability, physical
+# disability, physical attributes, animal references, religious offense, political, and a catch-all
+# *other / general insult* bucket). A single term can belong to up to three categories at once; PyRIT includes a
+# term in a category if any of its three category slots match. Each term also carries a `severity_rating` (mean of
+# five 1–3 human ratings); the default `surge_min_severity=1.0` includes everything, matching garak's loader.
+#
+# Surge AI did not publish this file with an explicit license. PyRIT fetches it from NVIDIA/garak's mirror at a pinned
+# commit rather than redistributing it — downstream use is your responsibility.
+
+# %%
+surge_terms = load_predefined_wordlist(
+    wordlist=PredefinedWordList.SURGE_RACIAL_ETHNIC_SLURS_EN,
+    surge_min_severity=2.0,
+)
+print(f"Surge racial/ethnic slurs at severity>=2.0: {len(surge_terms)}")

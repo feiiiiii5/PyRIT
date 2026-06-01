@@ -32,6 +32,18 @@ _OFCOM_SAMPLE = (
     "raceethnic\tMildOnly\t1\n"
 )
 
+_SURGE_SAMPLE = (
+    "text,canonical_form_1,canonical_form_2,canonical_form_3,"
+    "category_1,category_2,category_3,severity_rating,severity_description\n"
+    "ass,ass,,,sexual anatomy / sexual acts,,,1,Mild\n"
+    "asshole,asshole,,,sexual anatomy / sexual acts,,,2.4,Strong\n"
+    "pigfucker,pig,fuck,,sexual anatomy / sexual acts,animal references,,2.8,Severe\n"
+    "shit,shit,,,bodily fluids / excrement,,,1.6,Mild\n"
+    "chink,chink,,,racial / ethnic slurs,,,3,Severe\n"
+    ",,,,sexual anatomy / sexual acts,,,2,Strong\n"
+    "broken_severity,foo,,,sexual anatomy / sexual acts,,,not-a-number,Mild\n"
+)
+
 
 async def test_init_rejects_empty_terms(patch_central_database):
     with pytest.raises(ValueError, match="non-empty"):
@@ -296,3 +308,84 @@ def test_parse_ofcom_tsv_filters_by_category_and_strength():
     assert "Fuck" in terms
     assert "Crap" not in terms  # strength 1
     assert "Shag" not in terms  # different category
+
+
+def test_parse_surge_csv_filters_by_category():
+    terms = wordlist_module._parse_surge_csv(
+        csv_text=_SURGE_SAMPLE,
+        category_key="sexual anatomy / sexual acts",
+        min_severity=1.0,
+    )
+    assert "ass" in terms
+    assert "asshole" in terms
+    assert "pigfucker" in terms  # appears via category_1
+    assert "shit" not in terms  # different category
+    assert "chink" not in terms  # different category
+    assert "" not in terms  # blank-text row dropped
+    assert "broken_severity" not in terms  # severity unparseable -> dropped
+
+
+def test_parse_surge_csv_multi_category_row_matches_secondary_category():
+    """A term with category_2 == requested category should still be included."""
+    terms = wordlist_module._parse_surge_csv(
+        csv_text=_SURGE_SAMPLE,
+        category_key="animal references",
+        min_severity=1.0,
+    )
+    assert terms == ["pigfucker"]
+
+
+def test_parse_surge_csv_severity_filter():
+    terms = wordlist_module._parse_surge_csv(
+        csv_text=_SURGE_SAMPLE,
+        category_key="sexual anatomy / sexual acts",
+        min_severity=2.5,
+    )
+    assert terms == ["pigfucker"]  # 2.8; ass=1, asshole=2.4 dropped
+
+
+def test_load_surge_sexual_en_fetches_terms(lexicon_cache_dir):
+    with patch.object(wordlist_module.requests, "get", return_value=_mock_response(_SURGE_SAMPLE)) as mock_get:
+        terms = load_predefined_wordlist(wordlist=PredefinedWordList.SURGE_SEXUAL_EN)
+
+    assert "ass" in terms
+    assert "pigfucker" in terms
+    assert "chink" not in terms
+    mock_get.assert_called_once()
+    assert mock_get.call_args.args[0] == wordlist_module._GARAK_PROFANITY_URL
+
+
+def test_load_surge_racial_ethnic_slurs_en_isolates_category(lexicon_cache_dir):
+    with patch.object(wordlist_module.requests, "get", return_value=_mock_response(_SURGE_SAMPLE)):
+        terms = load_predefined_wordlist(wordlist=PredefinedWordList.SURGE_RACIAL_ETHNIC_SLURS_EN)
+
+    assert terms == ["chink"]
+
+
+def test_load_surge_respects_severity_filter(lexicon_cache_dir):
+    with patch.object(wordlist_module.requests, "get", return_value=_mock_response(_SURGE_SAMPLE)):
+        terms = load_predefined_wordlist(
+            wordlist=PredefinedWordList.SURGE_SEXUAL_EN,
+            surge_min_severity=2.5,
+        )
+
+    assert terms == ["pigfucker"]
+
+
+def test_load_surge_raises_when_no_terms_pass_filter(lexicon_cache_dir):
+    with patch.object(wordlist_module.requests, "get", return_value=_mock_response(_SURGE_SAMPLE)):
+        with pytest.raises(ValueError, match="No Surge terms"):
+            load_predefined_wordlist(
+                wordlist=PredefinedWordList.SURGE_POLITICAL_EN,
+                surge_min_severity=1.0,
+            )
+
+
+def test_load_surge_shares_cache_across_categories(lexicon_cache_dir):
+    """Multiple Surge categories must share the single cached CSV file."""
+    with patch.object(wordlist_module.requests, "get", return_value=_mock_response(_SURGE_SAMPLE)) as mock_get:
+        load_predefined_wordlist(wordlist=PredefinedWordList.SURGE_SEXUAL_EN)
+        load_predefined_wordlist(wordlist=PredefinedWordList.SURGE_RACIAL_ETHNIC_SLURS_EN)
+        load_predefined_wordlist(wordlist=PredefinedWordList.SURGE_ANIMAL_REFERENCES_EN)
+
+    assert mock_get.call_count == 1
