@@ -35,9 +35,9 @@ from pathlib import Path
 import requests
 
 from pyrit.common.path import DB_DATA_PATH
-from pyrit.identifiers import ComponentIdentifier
+from pyrit.models.identifiers import ComponentIdentifier
 from pyrit.score.scorer_prompt_validator import ScorerPromptValidator
-from pyrit.score.true_false.regex_scorer import RegexScorer
+from pyrit.score.true_false.regex.regex_scorer import RegexScorer
 from pyrit.score.true_false.true_false_score_aggregator import (
     TrueFalseAggregatorFunc,
     TrueFalseScoreAggregator,
