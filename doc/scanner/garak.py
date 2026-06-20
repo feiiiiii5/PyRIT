@@ -23,7 +23,7 @@ from pathlib import Path
 
 from pyrit.output import output_scenario_async
 from pyrit.registry import TargetRegistry
-from pyrit.scenario.garak import Encoding, EncodingStrategy
+from pyrit.scenario.garak import AccessShellCommands, Encoding, EncodingStrategy
 from pyrit.scenario.garak.encoding import EncodingDatasetConfiguration
 from pyrit.setup import initialize_from_config_async
 
@@ -67,6 +67,33 @@ scenario_result = await scenario.run_async()  # type: ignore
 
 # %%
 await output_scenario_async(scenario_result)
+
+# %% [markdown]
+# ## AccessShellCommands
+#
+# Tests Garak-style shell-command payload triggers using raw payload prompts from
+# `garak_access_shell_commands`.
+#
+# **CLI example:**
+#
+# ```bash
+# pyrit_scan garak.access_shell_commands --target openai_chat --max-dataset-size 1
+# ```
+#
+# The default strategy is Garak-faithful direct prompt sending (`prompt_sending`), while
+# additional attack-technique strategies remain available for deeper testing.
+
+# %%
+shell_scenario = AccessShellCommands()
+await shell_scenario.initialize_async(objective_target=objective_target)  # type: ignore
+
+print(f"Scenario: {shell_scenario.name}")
+print(f"Atomic attacks: {shell_scenario.atomic_attack_count}")
+
+shell_result = await shell_scenario.run_async()  # type: ignore
+
+# %%
+await output_scenario_async(shell_result)
 
 # %% [markdown]
 # For more details, see the [Scenarios Programming Guide](../code/scenarios/0_scenarios.ipynb) and
