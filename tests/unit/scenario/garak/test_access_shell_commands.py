@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from pyrit.executor.attack import PromptSendingAttack
-from pyrit.models import ComponentIdentifier, SeedAttackGroup, SeedGroup, SeedObjective, SeedPrompt
+from pyrit.models import ComponentIdentifier, SeedGroup, SeedObjective, SeedPrompt
 from pyrit.prompt_target import PromptTarget
 from pyrit.registry import TargetRegistry
 from pyrit.registry.class_registries.scenario_registry import ScenarioRegistry
@@ -77,7 +77,7 @@ class TestAccessShellCommandsInitialization:
     def test_init_defaults_to_garak_dataset(self) -> None:
         scenario = AccessShellCommands()
         assert scenario.VERSION == 1
-        assert scenario._default_strategy.value == "default"
+        assert scenario._default_strategy.value == "garak_default"
         assert scenario._default_dataset_config.get_default_dataset_names() == ["garak_access_shell_commands"]
 
     def test_default_strategy_expands_to_prompt_sending(self) -> None:
@@ -129,7 +129,7 @@ class TestAccessShellCommandsDatasetConfiguration:
 
     def test_dataset_configuration_raises_when_no_seeds(self) -> None:
         config = AccessShellCommandsDatasetConfiguration(seed_groups=[])
-        with pytest.raises(ValueError, match="No seeds found in the configured datasets"):
+        with pytest.raises(ValueError, match="DatasetConfiguration has no seed_groups"):
             config.get_all_seed_attack_groups()
 
 

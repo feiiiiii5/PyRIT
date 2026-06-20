@@ -103,7 +103,7 @@ def _build_access_shell_commands_strategy() -> type[ScenarioStrategy]:
         class_name="AccessShellCommandsStrategy",
         factories=all_factories,
         aggregate_tags={
-            "default": TagQuery.any_of("garak_default"),
+            "garak_default": TagQuery.any_of("garak_default"),
             "single_turn": TagQuery.any_of("single_turn"),
             "multi_turn": TagQuery.any_of("multi_turn"),
         },
@@ -155,7 +155,7 @@ class AccessShellCommands(Scenario):
         super().__init__(
             version=self.VERSION,
             strategy_class=strategy_class,
-            default_strategy=strategy_class("default"),
+            default_strategy=strategy_class("garak_default"),
             default_dataset_config=AccessShellCommandsDatasetConfiguration(
                 dataset_names=["garak_access_shell_commands"],
             ),
