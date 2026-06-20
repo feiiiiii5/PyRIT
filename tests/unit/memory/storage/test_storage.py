@@ -223,16 +223,21 @@ async def test_azure_blob_storage_io_create_container_client_raises_for_url_with
 
     with pytest.raises(ValueError, match="expected a container name"):
         await azure_blob_storage_io._create_container_client_async()
-    azure_blob_storage_io._client_async = AsyncMock()
+
+
+async def test_azure_storage_io_path_exists(azure_blob_storage_io):
+    mock_client = AsyncMock()
+    azure_blob_storage_io._client_async = mock_client
 
     mock_blob_client = AsyncMock()
-
-    azure_blob_storage_io._client_async.get_blob_client = Mock(return_value=mock_blob_client)
+    mock_client.get_blob_client = Mock(return_value=mock_blob_client)
     mock_blob_client.get_blob_properties = AsyncMock()
-    azure_blob_storage_io._client_async.close = AsyncMock()
+
     file_path = "https://example.blob.core.windows.net/container/dir1/dir2/blob_name.txt"
     exists = await azure_blob_storage_io.path_exists_async(file_path)
+
     assert exists is True
+    mock_client.close.assert_awaited_once()
 
 
 async def test_azure_storage_io_path_exists_with_relative_path(azure_blob_storage_io):

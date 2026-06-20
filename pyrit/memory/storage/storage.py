@@ -271,9 +271,8 @@ class AzureBlobStorageIO(StorageIO):
         """
         Create an asynchronous ContainerClient for Azure Storage.
 
-        If a SAS token is provided via the
-        AZURE_STORAGE_ACCOUNT_SAS_TOKEN environment variable or the init sas_token parameter, it will be used
-        for authentication. Otherwise, ``DefaultAzureCredential`` is used directly, which requires the caller
+        If a SAS token is provided via the init sas_token parameter, it will be used for authentication.
+        Otherwise, ``DefaultAzureCredential`` is used directly, which requires the caller
         to hold a data-plane role such as Storage Blob Data Contributor on the storage account.
 
         Returns:

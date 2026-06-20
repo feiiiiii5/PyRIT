@@ -37,7 +37,7 @@ class AzureBlobStorageTarget(PromptTarget):
 
     Args:
         container_url (str): URL to the Azure Blob Storage Container.
-        sas_token (optional[str]): Optional Blob SAS token needed to authenticate blob operations. If not provided,
+        sas_token (str | None): Optional Blob SAS token needed to authenticate blob operations. If not provided,
             ``DefaultAzureCredential`` is used directly, which requires the caller to hold a data-plane role such
             as Storage Blob Data Contributor on the storage account.
         blob_content_type (SupportedContentType): Expected Content Type of the blob, chosen from the
