@@ -120,15 +120,20 @@ class BrailleConverter(Converter):
         for char in text:
             if char in escape_characters:
                 output += char
-            elif char.isupper():
-                if char.lower() in character_unicodes:
-                    output += character_unicodes["caps"]
-                    output += character_unicodes[char.lower()]
             elif char in character_unicodes:
                 if char.isdigit() and not is_number:
                     is_number = True
                     output += character_unicodes["num"]
                 output += character_unicodes[char]
+            elif char.isupper() and char.lower() in character_unicodes:
+                output += character_unicodes["caps"]
+                output += character_unicodes[char.lower()]
+            else:
+                # Characters outside the Braille table (e.g. "@", "%", "+",
+                # accented or CJK letters) pass through unchanged instead of
+                # being silently dropped, so the encoded prompt keeps its
+                # meaning.
+                output += char
             if is_number and not char.isdigit() and char not in number_punctuations:
                 is_number = False
 

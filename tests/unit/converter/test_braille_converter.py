@@ -131,3 +131,34 @@ async def test_braille_converter_punctuation_cells():
             f"{char!r} -> {result.output_text!r} (U+{ord(result.output_text):04X}), "
             f"expected {cell!r} (U+{ord(cell):04X})"
         )
+
+
+async def test_braille_converter_preserves_unknown_characters():
+    """Characters outside the Braille table must pass through unchanged.
+
+    Regression: '@', '%', '+', '<' and non-Latin letters were silently dropped,
+    corrupting the encoded prompt (e.g. "a@b.com" became "ab.com").
+    """
+    converter = BrailleConverter()
+
+    result = await converter.convert_async(prompt="a@b.com", input_type="text")
+    assert "@" in result.output_text
+
+    result = await converter.convert_async(prompt="What's 2+2?", input_type="text")
+    assert "+" in result.output_text
+
+    result = await converter.convert_async(prompt="100% sure", input_type="text")
+    assert "%" in result.output_text
+
+    result = await converter.convert_async(prompt="café 中文", input_type="text")
+    assert "é" in result.output_text
+    assert "中" in result.output_text
+
+
+async def test_braille_converter_known_characters_still_encoded():
+    """Known characters are still converted to Braille, not passed through."""
+    converter = BrailleConverter()
+    result = await converter.convert_async(prompt="hello", input_type="text")
+
+    assert "h" not in result.output_text
+    assert result.output_text != "hello"
