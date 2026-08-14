@@ -43,7 +43,7 @@ async def test_nato_converter_mixed_case():
 
 
 async def test_nato_converter_with_numbers():
-    """Test that numbers are ignored in NATO conversion."""
+    """Test that numbers are preserved in NATO conversion."""
     converter = NatoConverter()
     prompt = "a1b2c3"
 
@@ -51,8 +51,8 @@ async def test_nato_converter_with_numbers():
 
     assert isinstance(result, ConverterResult)
     assert result.output_type == "text"
-    # Only letters should be converted
-    assert result.output_text == "Alfa Bravo Charlie"
+    # Digits are preserved as-is so the encoded prompt keeps its full content
+    assert result.output_text == "Alfa 1 Bravo 2 Charlie 3"
 
 
 async def test_nato_converter_with_spaces():
@@ -69,7 +69,7 @@ async def test_nato_converter_with_spaces():
 
 
 async def test_nato_converter_with_punctuation():
-    """Test that punctuation is ignored in NATO conversion."""
+    """Test that punctuation is preserved in NATO conversion."""
     converter = NatoConverter()
     prompt = "Hello, world!"
 
@@ -77,8 +77,8 @@ async def test_nato_converter_with_punctuation():
 
     assert isinstance(result, ConverterResult)
     assert result.output_type == "text"
-    # Only letters should be converted
-    assert result.output_text == "Hotel Echo Lima Lima Oscar Whiskey Oscar Romeo Lima Delta"
+    # Punctuation is preserved as-is so the encoded prompt keeps its full content
+    assert result.output_text == "Hotel Echo Lima Lima Oscar , Whiskey Oscar Romeo Lima Delta !"
 
 
 async def test_nato_converter_empty_string():
@@ -94,7 +94,11 @@ async def test_nato_converter_empty_string():
 
 
 async def test_nato_converter_no_letters():
-    """Test NATO conversion with no alphabetic characters."""
+    """Test NATO conversion with no alphabetic characters.
+
+    Regression: non-empty input must never convert to an empty prompt
+    (digits/punctuation are preserved rather than erased).
+    """
     converter = NatoConverter()
     prompt = "123!@#"
 
@@ -102,7 +106,7 @@ async def test_nato_converter_no_letters():
 
     assert isinstance(result, ConverterResult)
     assert result.output_type == "text"
-    assert result.output_text == ""
+    assert result.output_text == "1 2 3 ! @ #"
 
 
 async def test_nato_converter_all_letters():

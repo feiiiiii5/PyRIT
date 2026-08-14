@@ -13,7 +13,8 @@ class NatoConverter(Converter):
     This converter transforms standard text into NATO phonetic alphabet format,
     where each letter is replaced with its corresponding NATO phonetic code word
     (e.g., "A" becomes "Alfa", "B" becomes "Bravo"). Only alphabetic characters
-    are converted; non-alphabetic characters are ignored.
+    are converted; non-alphabetic characters (digits, punctuation) are preserved
+    as-is, and spaces act as separators.
 
     The NATO phonetic alphabet is the most widely used spelling alphabet, designed
     to improve clarity of voice communication. This converter can be used to test
@@ -90,6 +91,6 @@ class NatoConverter(Converter):
         Returns:
             str: The NATO phonetic alphabet representation, with code words separated by spaces.
         """
-        output = [self._NATO_MAP[char] for char in text.upper() if char in self._NATO_MAP]
+        output = [self._NATO_MAP.get(char, char) for char in text.upper() if char != " "]
 
         return " ".join(output)
