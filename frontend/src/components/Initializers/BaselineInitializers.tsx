@@ -9,11 +9,13 @@ import { useInitializersStyles } from './Initializers.styles'
 interface BaselineInitializersProps {
   items: BaselineInitializerSetting[]
   registeredInitializers: RegisteredInitializer[]
+  catalogAvailable?: boolean
 }
 
 export default function BaselineInitializers({
   items,
   registeredInitializers,
+  catalogAvailable = true,
 }: BaselineInitializersProps) {
   const styles = useInitializersStyles()
 
@@ -32,7 +34,7 @@ export default function BaselineInitializers({
       ) : (
         <div className={styles.baselineGroup} role="list" aria-label="Baseline initializers">
           {items.map((item: BaselineInitializerSetting) => {
-            const initializer = resolveRegisteredInitializer(item.initializer_name, registeredInitializers)
+            const initializer = resolveRegisteredInitializer(item.initializer_name, registeredInitializers, catalogAvailable)
             return (
               <div
                 key={`${item.initializer_name}:${item.order_index}`}

@@ -25,6 +25,7 @@ import ConfirmDialog from '../ConfirmDialog'
 interface AdditionalInitializersProps {
   items: AdditionalInitializerSetting[]
   registeredInitializers: RegisteredInitializer[]
+  catalogAvailable?: boolean
   creating: boolean
   savingInitializerId?: string | null
   saveErrors?: Record<string, string>
@@ -157,6 +158,7 @@ function AdditionalInitializerCard({
 export default function AdditionalInitializers({
   items,
   registeredInitializers,
+  catalogAvailable = true,
   creating,
   savingInitializerId = null,
   saveErrors = {},
@@ -237,7 +239,7 @@ export default function AdditionalInitializers({
             <AdditionalInitializerCard
               key={`${item.id}:${formatInitializerParameters(item.parameters)}:${item.order_index ?? ''}`}
               item={item}
-              initializer={resolveRegisteredInitializer(item.initializer_name, registeredInitializers)}
+              initializer={resolveRegisteredInitializer(item.initializer_name, registeredInitializers, catalogAvailable)}
               isSaving={savingInitializerId === item.id}
               isApplying={applyingInitializerId === item.id}
               isDeleting={deletingInitializerId === item.id}

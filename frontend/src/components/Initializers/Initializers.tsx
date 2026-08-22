@@ -26,6 +26,10 @@ export default function Initializers() {
   const styles = useInitializersStyles()
   const [settings, setSettings] = useState<InitializerSettingsResponse>(EMPTY_SETTINGS)
   const [registeredInitializers, setRegisteredInitializers] = useState<RegisteredInitializer[]>([])
+  // A failed catalog request leaves registration state unknown; rows must
+  // then say "temporarily unavailable" instead of "no longer registered",
+  // which would present a metadata outage as a configuration problem.
+  const [catalogAvailable, setCatalogAvailable] = useState(true)
   const [loading, setLoading] = useState(true)
   const [statusMessage, setStatusMessage] = useState<StatusMessage | null>(null)
   const [refetchCount, setRefetchCount] = useState(0)
@@ -55,7 +59,9 @@ export default function Initializers() {
 
       if (registeredResult.status === 'fulfilled') {
         setRegisteredInitializers(registeredResult.value.items)
+        setCatalogAvailable(true)
       } else {
+        setCatalogAvailable(false)
         const catalogError = toApiError(registeredResult.reason).detail
         setStatusMessage((current: StatusMessage | null) =>
           current
@@ -207,10 +213,12 @@ export default function Initializers() {
           <BaselineInitializers
             items={settings.baseline}
             registeredInitializers={registeredInitializers}
+            catalogAvailable={catalogAvailable}
           />
           <AdditionalInitializers
             items={settings.additional}
             registeredInitializers={registeredInitializers}
+            catalogAvailable={catalogAvailable}
             creating={creating}
             savingInitializerId={savingInitializerId}
             saveErrors={saveErrors}

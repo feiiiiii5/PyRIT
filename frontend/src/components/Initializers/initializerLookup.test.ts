@@ -45,3 +45,24 @@ describe('resolveRegisteredInitializer', () => {
     expect(result.initializer_type).toBe('UnknownInitializer')
   })
 })
+
+describe('resolveRegisteredInitializer with catalog availability', () => {
+  it('reports temporary unavailability instead of unregistered when the catalog request failed', () => {
+    const result = resolveRegisteredInitializer('target', [], false)
+
+    expect(result).toEqual({
+      initializer_name: 'target',
+      initializer_type: 'UnverifiedInitializer',
+      description: expect.stringContaining('temporarily unavailable'),
+      required_env_vars: [],
+      supported_parameters: [],
+    })
+    expect(result.description).not.toContain('no longer registered')
+  })
+
+  it('still resolves matches from stale-but-loaded catalog data when available flag is true', () => {
+    const result = resolveRegisteredInitializer('target', registered, true)
+
+    expect(result).toBe(registered[0])
+  })
+})

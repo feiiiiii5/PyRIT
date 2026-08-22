@@ -285,6 +285,31 @@ describe('Initializers', () => {
     expect(screen.getByText('Service Unavailable')).toBeInTheDocument()
   })
 
+  it('should describe rows as temporarily unavailable, not unregistered, when the catalog fails', async () => {
+    mockedInitializersApi.listRegistered.mockRejectedValue(new Error('Service Unavailable'))
+
+    renderInitializers()
+
+    const row = await screen.findByTestId('baseline-initializer-row-target')
+    // A metadata outage must not be presented as a configuration problem.
+    expect(within(row).getByText(/temporarily unavailable/i)).toBeInTheDocument()
+    expect(within(row).queryByText(/no longer registered/i)).not.toBeInTheDocument()
+
+    mockedInitializersApi.listRegistered.mockResolvedValue({
+      items: [targetInitializer],
+      pagination: { limit: 200, has_more: false },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+
+    // Refresh re-runs the load effect (and remounts rows via the loading
+    // state), so assert on a freshly queried node.
+    await waitFor(async () => {
+      expect(screen.getByTestId('baseline-initializer-row-target')).toHaveTextContent(
+        'Registers targets.',
+      )
+    })
+  })
+
   it('should remove an additional initializer and show success feedback', async () => {
     const user = userEvent.setup()
     renderInitializers()
