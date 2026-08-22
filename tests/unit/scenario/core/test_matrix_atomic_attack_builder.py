@@ -18,6 +18,8 @@ cross-product for scenarios whose attacks form such a grid. These tests pin the 
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import logging
+
 import pytest
 
 from pyrit.models import AttackSeedGroup, SeedObjective
@@ -407,6 +409,17 @@ class TestResolveTechniqueFactories:
         with _patch_registry(factories):
             resolved = resolve_technique_factories(context=context)
         assert list(resolved.keys()) == ["alpha"]
+
+    def test_warns_when_selected_technique_has_no_factory(self, caplog, ):
+        factories = {"alpha": _mock_factory(name="alpha")}
+        context = _context(techniques=[_technique("alpha"), _technique("missing")])
+        with (
+            _patch_registry(factories),
+            caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.matrix_atomic_attack_builder"),
+        ):
+            resolved = resolve_technique_factories(context=context)
+        assert list(resolved.keys()) == ["alpha"]
+        assert any("missing" in r.getMessage() for r in caplog.records)
 
     def test_extra_factories_merged_and_override_registry(self):
         registry_factories = {"alpha": _mock_factory(name="alpha")}

@@ -160,6 +160,15 @@ def resolve_technique_factories(
     all_factories = dict(AttackTechniqueRegistry.get_registry_singleton().get_factories_or_raise())
     if extra_factories:
         all_factories.update(extra_factories)
+    missing = [
+        technique.value
+        for technique in context.scenario_techniques
+        if technique.value not in all_factories
+    ]
+    if missing:
+        logger.warning(
+            f"Selected techniques have no registered factory and will be skipped: {missing}"
+        )
     return {
         technique.value: all_factories[technique.value]
         for technique in context.scenario_techniques
