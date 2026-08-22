@@ -15,10 +15,9 @@ cross-product for scenarios whose attacks form such a grid. These tests pin the 
 * optional baseline emission from the flattened seed groups.
 """
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-
-import logging
 
 import pytest
 
@@ -410,7 +409,7 @@ class TestResolveTechniqueFactories:
             resolved = resolve_technique_factories(context=context)
         assert list(resolved.keys()) == ["alpha"]
 
-    def test_warns_when_selected_technique_has_no_factory(self, caplog, ):
+    def test_warns_when_selected_technique_has_no_factory(self, caplog: pytest.LogCaptureFixture) -> None:
         factories = {"alpha": _mock_factory(name="alpha")}
         context = _context(techniques=[_technique("alpha"), _technique("missing")])
         with (

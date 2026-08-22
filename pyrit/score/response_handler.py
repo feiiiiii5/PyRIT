@@ -220,7 +220,7 @@ class JsonSchemaResponseHandler(ResponseHandler):
                 parsed category is not a string or a list of strings.
             InvalidJsonException: If the response is invalid JSON, is not a top-level JSON object,
                 is missing a required key, or (when this handler is numeric) the score value is not
-                parsable as a float.
+                a finite float.
         """
         response_json = remove_markdown_json(response_text)
         try:

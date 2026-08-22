@@ -32,7 +32,9 @@ export async function fetchAuthConfig(): Promise<AuthConfig> {
     // infrastructure failure, not proof that auth is disabled. Surface it so
     // AuthProvider can show its error state instead of rendering the shell
     // while protected APIs return 401.
-    throw new Error(`Failed to reach /api/auth/config: ${e instanceof Error ? e.message : String(e)}`)
+    throw Object.assign(new Error(`Failed to reach /api/auth/config: ${e instanceof Error ? e.message : String(e)}`), {
+      cause: e,
+    })
   }
   if (!response.ok) {
     // HTTP-level failures on the config endpoint are equally inconclusive.
