@@ -86,11 +86,15 @@ describe("msalConfig", () => {
     });
 
     it("throws on network error (transient failure is not auth-disabled)", async () => {
-      (global.fetch as jest.Mock).mockRejectedValue(new Error("Network error"));
+      const networkError = new Error("Network error");
+      (global.fetch as jest.Mock).mockRejectedValue(networkError);
 
       const { fetchAuthConfig } = await import("./msalConfig");
 
-      await expect(fetchAuthConfig()).rejects.toThrow("Failed to reach /api/auth/config");
+      await expect(fetchAuthConfig()).rejects.toMatchObject({
+        message: "Failed to reach /api/auth/config: Network error",
+        cause: networkError,
+      });
     });
   });
 });

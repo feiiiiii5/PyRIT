@@ -27,12 +27,17 @@ export async function fetchAuthConfig(): Promise<AuthConfig> {
   let response: Response
   try {
     response = await fetch('/api/auth/config')
-  } catch (e) {
+  } catch (error) {
     // A network error (e.g., backend not running yet) is a transient
     // infrastructure failure, not proof that auth is disabled. Surface it so
     // AuthProvider can show its error state instead of rendering the shell
     // while protected APIs return 401.
-    throw new Error(`Failed to reach /api/auth/config: ${e instanceof Error ? e.message : String(e)}`)
+    const fetchError = new Error(
+      `Failed to reach /api/auth/config: ${error instanceof Error ? error.message : String(error)}`,
+    )
+    // ErrorOptions requires ES2022, while this project targets ES2020.
+    Object.defineProperty(fetchError, 'cause', { value: error })
+    throw fetchError
   }
   if (!response.ok) {
     // HTTP-level failures on the config endpoint are equally inconclusive.
