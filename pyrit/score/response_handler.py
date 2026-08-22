@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import abc
 import json
+import math
 from abc import abstractmethod
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
@@ -251,11 +252,15 @@ class JsonSchemaResponseHandler(ResponseHandler):
             try:
                 # A numeric handler requires the score value to be parsable as a float; a
                 # well-formed-but-non-numeric value is treated as an invalid response.
-                float(score.raw_score_value)
+                parsed_value = float(score.raw_score_value)
             except ValueError:
                 raise InvalidJsonException(
                     message=f"Invalid JSON response, score_value should be a float not this: {score.raw_score_value}"
                 ) from None
+            if not math.isfinite(parsed_value):
+                raise InvalidJsonException(
+                    message=f"Invalid JSON response, score_value must be a finite float: {score.raw_score_value}"
+                )
 
         return score
 
