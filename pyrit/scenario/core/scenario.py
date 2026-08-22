@@ -145,7 +145,7 @@ class Scenario(ABC):
         Returns:
             Sequence[Path]: Paths to true/false question prompts, or an empty sequence to use the default scorer.
         """
-        return []
+        return ()
 
     def __init__(
         self,
@@ -484,20 +484,28 @@ class Scenario(ABC):
                 nor available as a global default.
 
         Raises:
+            TypeError: If a configured default or resolved target is not a ``PromptTarget``.
             ValueError: If a target name is supplied that is not registered in ``TargetRegistry``.
         """
         if value is None:
             found, default = get_global_default_values().get_default_value(
                 class_type=type(self), parameter_name="objective_target"
             )
-            return default if found else None
+            if not found or default is None:
+                return None
+            if not isinstance(default, PromptTarget):
+                raise TypeError(f"Default objective_target must be a PromptTarget, got {type(default).__name__}")
+            return default
 
-        return resolve_reference_value(
+        resolved = resolve_reference_value(
             component_type=ComponentType.TARGET,
             value=value,
             owner=type(self).__name__,
             name="objective_target",
         )
+        if not isinstance(resolved, PromptTarget):
+            raise TypeError(f"Resolved objective_target must be a PromptTarget, got {type(resolved).__name__}")
+        return resolved
 
     def _resolve_scenario_techniques(self, *, scenario_techniques: Any) -> list[ScenarioTechnique]:
         """
@@ -1018,6 +1026,8 @@ class Scenario(ABC):
                 attack results from all atomic attacks.
 
         Raises:
+            asyncio.CancelledError: If the scenario task is cancelled. Completed results remain persisted
+                and a later call can resume the unfinished objectives.
             ValueError: If the scenario has no atomic attacks configured. If your scenario
                 requires initialization, call await scenario.initialize() first.
             ScenarioPartialFailureException: If an atomic attack only partially completes.
@@ -1048,6 +1058,17 @@ class Scenario(ABC):
         for retry_attempt in range(self._max_retries + 1):  # +1 for initial attempt
             try:
                 return await self._execute_scenario_async()
+            except asyncio.CancelledError:
+                try:
+                    self._memory.update_scenario_run_state(
+                        scenario_result_id=scenario_result_id,
+                        scenario_run_state=ScenarioRunState.CANCELLED,
+                        error_message="Scenario run was cancelled",
+                        error_type="CancelledError",
+                    )
+                except Exception:
+                    logger.exception(f"Failed to persist cancellation state for scenario '{self._name}'")
+                raise
             except Exception as e:
                 last_exception = e
 

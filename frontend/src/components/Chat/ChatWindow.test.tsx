@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { FluentProvider, webLightTheme } from "@fluentui/react-components";
 import ChatWindow from "./ChatWindow";
 import { makeTarget } from "@/test-utils/targetFixtures";
-import { Message, TargetCapabilities, TargetInfo, TargetInstance } from "../../types";
+import { Message, MessageAttachment, TargetCapabilities, TargetInfo, TargetInstance } from "../../types";
 import { attacksApi, convertersApi } from "../../services/api";
 import * as messageMapper from "../../utils/messageMapper";
 
@@ -54,6 +54,7 @@ jest.mock("../../utils/messageMapper", () => ({
 const mockedAttacksApi = attacksApi as jest.Mocked<typeof attacksApi>;
 const mockedConvertersApi = convertersApi as jest.Mocked<typeof convertersApi>;
 const mockedMapper = messageMapper as jest.Mocked<typeof messageMapper>;
+const MARKDOWN_PREFERENCE_STORAGE_KEY = "pyrit.chatMarkdownMode";
 
 const TestWrapper: React.FC<{ children: React.ReactNode }> = ({
   children,
@@ -275,6 +276,7 @@ describe("ChatWindow Integration", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    window.localStorage.clear();
     mockMatchMedia(false);
     // Default: panel API returns empty conversations
     mockedAttacksApi.getConversations.mockResolvedValue({
@@ -290,6 +292,10 @@ describe("ChatWindow Integration", () => {
     mockedConvertersApi.listConverterCatalog.mockResolvedValue({
       items: [],
     });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   // -----------------------------------------------------------------------
@@ -312,9 +318,20 @@ describe("ChatWindow Integration", () => {
     expect(screen.getByRole("textbox")).toBeInTheDocument();
   });
 
-  it("renders a global markdown switch that toggles on click", async () => {
-    const user = userEvent.setup();
+  it("defaults to raw mode when no Markdown preference is stored", () => {
     render(
+      <TestWrapper>
+        <ChatWindow {...defaultProps} />
+      </TestWrapper>
+    );
+
+    expect(screen.getByRole("switch", { name: /markdown/i })).not.toBeChecked();
+    expect(window.localStorage.getItem(MARKDOWN_PREFERENCE_STORAGE_KEY)).toBeNull();
+  });
+
+  it("persists explicit Markdown and raw choices across remounts", async () => {
+    const user = userEvent.setup();
+    const firstRender = render(
       <TestWrapper>
         <ChatWindow {...defaultProps} />
       </TestWrapper>
@@ -323,6 +340,84 @@ describe("ChatWindow Integration", () => {
     const toggle = screen.getByRole("switch", { name: /markdown/i });
     expect(toggle).not.toBeChecked();
 
+    await user.click(toggle);
+    expect(toggle).toBeChecked();
+    expect(window.localStorage.getItem(MARKDOWN_PREFERENCE_STORAGE_KEY)).toBe("markdown");
+
+    firstRender.unmount();
+    const secondRender = render(
+      <TestWrapper>
+        <ChatWindow {...defaultProps} />
+      </TestWrapper>
+    );
+    const remountedToggle = screen.getByRole("switch", { name: /markdown/i });
+    expect(remountedToggle).toBeChecked();
+
+    await user.click(remountedToggle);
+    expect(remountedToggle).not.toBeChecked();
+    expect(window.localStorage.getItem(MARKDOWN_PREFERENCE_STORAGE_KEY)).toBe("raw");
+
+    secondRender.unmount();
+    render(
+      <TestWrapper>
+        <ChatWindow {...defaultProps} />
+      </TestWrapper>
+    );
+    expect(screen.getByRole("switch", { name: /markdown/i })).not.toBeChecked();
+  });
+
+  it("initializes Markdown mode from stored preference", () => {
+    window.localStorage.setItem(MARKDOWN_PREFERENCE_STORAGE_KEY, "markdown");
+
+    render(
+      <TestWrapper>
+        <ChatWindow {...defaultProps} />
+      </TestWrapper>
+    );
+
+    expect(screen.getByRole("switch", { name: /markdown/i })).toBeChecked();
+  });
+
+  it("falls back to raw mode for an invalid stored preference", () => {
+    window.localStorage.setItem(MARKDOWN_PREFERENCE_STORAGE_KEY, "invalid");
+
+    render(
+      <TestWrapper>
+        <ChatWindow {...defaultProps} />
+      </TestWrapper>
+    );
+
+    expect(screen.getByRole("switch", { name: /markdown/i })).not.toBeChecked();
+  });
+
+  it("falls back to raw mode when localStorage is unavailable during initialization", () => {
+    jest.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("Access denied", "SecurityError");
+    });
+
+    expect(() => {
+      render(
+        <TestWrapper>
+          <ChatWindow {...defaultProps} />
+        </TestWrapper>
+      );
+    }).not.toThrow();
+    expect(screen.getByRole("switch", { name: /markdown/i })).not.toBeChecked();
+  });
+
+  it("keeps the in-memory choice when localStorage is unavailable during persistence", async () => {
+    const user = userEvent.setup();
+    jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+
+    render(
+      <TestWrapper>
+        <ChatWindow {...defaultProps} />
+      </TestWrapper>
+    );
+
+    const toggle = screen.getByRole("switch", { name: /markdown/i });
     await user.click(toggle);
     expect(toggle).toBeChecked();
   });
@@ -410,6 +505,79 @@ describe("ChatWindow Integration", () => {
     // ChatInputArea shows a red warning banner instead of the text input
     expect(screen.getByTestId("no-target-banner")).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("should disable sending while routed attack metadata is loading", () => {
+    render(
+      <TestWrapper>
+        <ChatWindow
+          {...defaultProps}
+          activeTarget={mockTarget}
+          isLoadingAttack
+        />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId("chat-input")).toBeDisabled();
+  });
+
+  it("should keep an unverifiable historical target read-only and retryable", async () => {
+    const user = userEvent.setup();
+    const onRetryTargetResolution = jest.fn();
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: "Historical response",
+        timestamp: "2026-01-01T00:00:00Z",
+      },
+    ];
+    mockedAttacksApi.getMessages.mockResolvedValue({ messages: [] });
+    mockedAttacksApi.getConversations.mockResolvedValue({
+      attack_result_id: "ar-unverifiable",
+      main_conversation_id: "conv-unverifiable",
+      conversations: [
+        {
+          conversation_id: "conv-unverifiable",
+          message_count: 1,
+        },
+        {
+          conversation_id: "conv-related",
+          message_count: 1,
+        },
+      ],
+    });
+    mockedMapper.backendMessagesToFrontend.mockReturnValue(messages);
+
+    render(
+      <TestWrapper>
+        <ChatWindow
+          {...defaultProps}
+          activeTarget={null}
+          attackResultId="ar-unverifiable"
+          conversationId="conv-unverifiable"
+          activeConversationId="conv-unverifiable"
+          attackTarget={{
+            target_type: "TextTarget",
+            identifier_hash: "unverifiable-hash",
+          }}
+          targetResolutionStatus="error"
+          onRetryTargetResolution={onRetryTargetResolution}
+          relatedConversationCount={1}
+        />
+      </TestWrapper>
+    );
+
+    expect(await screen.findByTestId("target-resolution-error-banner")).toBeInTheDocument();
+    expect(await screen.findByText("Historical response")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByTestId("copy-to-input-btn-0")).toBeDisabled();
+    expect(screen.getByTestId("branch-conv-btn-0")).toBeDisabled();
+    expect(screen.getByTestId("branch-attack-btn-0")).toBeDisabled();
+    expect(await screen.findByTestId("star-btn-conv-related")).toBeDisabled();
+    expect(mockedAttacksApi.changeMainConversation).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /retry/i }));
+    expect(onRetryTargetResolution).toHaveBeenCalledTimes(1);
   });
 
   // -----------------------------------------------------------------------
@@ -2090,10 +2258,38 @@ describe("ChatWindow Integration", () => {
   // -----------------------------------------------------------------------
 
   it("should create a new conversation and copy message when copy-to-new-conv is clicked", async () => {
+    const user = userEvent.setup();
     const onSelectConversation = jest.fn();
     const mockMessages: Message[] = [
       { role: "user", content: "hello" },
-      { role: "assistant", content: "reply text to copy" },
+      {
+        role: "assistant",
+        content: "reply text to copy",
+        attachments: [
+          {
+            type: "image",
+            name: "first.png",
+            url: "data:image/png;base64,aW1hZ2U=",
+            mimeType: "image/png",
+            pieceId: "piece-image",
+            metadata: { source: "generated" },
+          },
+          {
+            type: "file",
+            name: "excluded.pdf",
+            url: "data:application/pdf;base64,cGRm",
+            mimeType: "application/pdf",
+          },
+          {
+            type: "audio",
+            name: "second.wav",
+            url: "data:audio/wav;base64,YXVkaW8=",
+            mimeType: "audio/wav",
+            pieceId: "piece-audio",
+            metadata: { voice: "alloy" },
+          },
+        ],
+      },
     ];
 
     mockedAttacksApi.getMessages.mockResolvedValue({ messages: [] });
@@ -2120,12 +2316,15 @@ describe("ChatWindow Integration", () => {
     });
 
     const copyBtn = screen.getByTestId("copy-to-new-conv-btn-1");
-    await userEvent.click(copyBtn);
+    await user.click(copyBtn);
 
     await waitFor(() => {
       expect(mockedAttacksApi.createConversation).toHaveBeenCalledWith("ar-copy-new", {});
       expect(onSelectConversation).toHaveBeenCalledWith("new-conv-copy");
     });
+    expect(await screen.findByText(/first\.png/)).toBeInTheDocument();
+    expect(screen.getByText(/second\.wav/)).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^remove-attachment-/)).toHaveLength(2);
   });
 
   it("should fall back when createConversation fails in copy-to-new-conversation", async () => {
@@ -2884,30 +3083,58 @@ describe("ChatWindow Integration", () => {
   // -----------------------------------------------------------------------
 
   it("should copy message with attachments to input box", async () => {
+    const user = userEvent.setup();
+    const copiedAttachments: MessageAttachment[] = [
+      {
+        type: "image",
+        name: "first.png",
+        url: "data:image/png;base64,aW1hZ2U=",
+        mimeType: "image/png",
+        size: 12,
+        pieceId: "piece-image",
+        metadata: { source: "generated" },
+      },
+      {
+        type: "file",
+        name: "excluded.pdf",
+        url: "data:application/pdf;base64,cGRm",
+        mimeType: "application/pdf",
+        pieceId: "piece-file",
+        metadata: { source: "document" },
+      },
+      {
+        type: "audio",
+        name: "second.wav",
+        url: "data:audio/wav;base64,YXVkaW8=",
+        mimeType: "audio/wav",
+        pieceId: "piece-audio",
+        metadata: { voice: "alloy" },
+      },
+    ];
     const mockMessages: Message[] = [
       { role: "user", content: "hello" },
       {
         role: "assistant",
         content: "Here is an image",
-        attachments: [
-          {
-            type: "image" as const,
-            name: "test.png",
-            url: "data:image/png;base64,iVBORw0KGgo=",
-            mimeType: "image/png",
-            size: 12,
-          },
-        ],
+        attachments: copiedAttachments,
       },
     ];
 
     mockedAttacksApi.getMessages.mockResolvedValue({ messages: [] });
     mockedMapper.backendMessagesToFrontend.mockReturnValue(mockMessages);
+    mockedMapper.buildMessagePieces.mockResolvedValue([]);
+    mockedAttacksApi.addMessage.mockResolvedValue(makeTextResponse("done") as never);
 
     render(
       <TestWrapper>
         <ChatWindow
           {...defaultProps}
+          activeTarget={{
+            ...mockTarget,
+            capabilities: buildCapabilities({
+              supported_input_modalities: ["image_path", "audio_path"],
+            }),
+          }}
           attackResultId="ar-copy-att"
           conversationId="conv-copy-att"
           activeConversationId="conv-copy-att"
@@ -2920,12 +3147,23 @@ describe("ChatWindow Integration", () => {
     });
 
     const copyBtn = screen.getByTestId("copy-to-input-btn-1");
-    await userEvent.click(copyBtn);
+    await user.click(copyBtn);
 
-    // The text should appear in the input area
     await waitFor(() => {
       const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
       expect(textarea.value).toBe("Here is an image");
+    });
+    expect(screen.getByText(/first\.png/)).toBeInTheDocument();
+    expect(screen.getByText(/second\.wav/)).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^remove-attachment-/)).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => {
+      expect(mockedMapper.buildMessagePieces).toHaveBeenCalledWith(
+        "Here is an image",
+        [copiedAttachments[0], copiedAttachments[2]]
+      );
     });
   });
 
