@@ -52,6 +52,9 @@ The main components of PyRIT are seeds, scenarios, attack techniques, executors 
 
 The diagram below shows how the pieces fit together: entry points run **scenarios**, which package **datasets** with **attack techniques**; each technique drives an **attack/executor** that orchestrates **converters**, **targets**, and **scorers**; and a shared library layer (**memory**, **registry**, **models**, **output**, and more) supports all of them.
 
+:::{div}
+:class: col-page-right
+
 ```mermaid
 flowchart TB
     subgraph entry [Entry points]
@@ -105,6 +108,7 @@ flowchart TB
     class SCEN,TECH,ATK flow;
     class MEM,REG,MODEL,OUT libnode;
 ```
+:::
 
 The orchestration layers **nest from broadest to narrowest** — each owns less than the layer above it:
 
@@ -305,6 +309,8 @@ The below talks about responsibilities of most modules in the PyRIT library
 - Models includes `identifiers` which are descriptions of the core components. And along with the registry, can often recreate those components.
 - Models includes types passed around between components, and should be prefered in REST
 - models should never depend on anything except lightweight Python (the standard library and pydantic) and pyrit.common
+- Store metadata on the narrowest model that owns it (for example, request or response data belongs on `MessagePiece`, not `Message`). Use explicit typed fields for stable, core, or independently queried data.
+- For shared metadata, define a lightweight value object in `pyrit.models` that owns its keys and provides symmetric `to_metadata()` and `from_metadata()` methods. Use `JsonResponseConfig` as the pattern for data stored in `MessagePiece.prompt_metadata`.
 
 ## [Normalizers](./targets/11_message_normalizer)
 
