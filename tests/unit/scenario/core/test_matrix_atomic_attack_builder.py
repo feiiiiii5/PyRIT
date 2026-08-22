@@ -15,6 +15,7 @@ cross-product for scenarios whose attacks form such a grid. These tests pin the 
 * optional baseline emission from the flattened seed groups.
 """
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -407,6 +408,49 @@ class TestResolveTechniqueFactories:
         with _patch_registry(factories):
             resolved = resolve_technique_factories(context=context)
         assert list(resolved.keys()) == ["alpha"]
+
+    def test_warns_when_dropping_techniques_without_factory(self, caplog):
+        factories = {"alpha": _mock_factory(name="alpha")}
+        context = _context(techniques=[_technique("alpha"), _technique("missing")])
+        with (
+            _patch_registry(factories),
+            caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.matrix_atomic_attack_builder"),
+        ):
+            resolve_technique_factories(context=context)
+        assert any("missing" in record.message for record in caplog.records)
+
+    def test_no_warning_when_all_techniques_resolve(self, caplog):
+        factories = {
+            "alpha": _mock_factory(name="alpha"),
+            "beta": _mock_factory(name="beta"),
+        }
+        context = _context(techniques=[_technique("alpha"), _technique("beta")])
+        with (
+            _patch_registry(factories),
+            caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.matrix_atomic_attack_builder"),
+        ):
+            resolve_technique_factories(context=context)
+        assert not [record for record in caplog.records if record.levelno == logging.WARNING]
+
+    def test_warning_lists_each_missing_technique_once_in_selection_order(self, caplog):
+        factories = {"alpha": _mock_factory(name="alpha")}
+        context = _context(
+            techniques=[
+                _technique("missing_a"),
+                _technique("alpha"),
+                _technique("missing_b"),
+                _technique("missing_a"),
+            ]
+        )
+        with (
+            _patch_registry(factories),
+            caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.matrix_atomic_attack_builder"),
+        ):
+            resolve_technique_factories(context=context)
+        messages = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+        assert len(messages) == 1
+        assert messages[0].index("missing_a") < messages[0].index("missing_b")
+        assert messages[0].count("missing_a") == 1  # duplicates are deduplicated
 
     def test_extra_factories_merged_and_override_registry(self):
         registry_factories = {"alpha": _mock_factory(name="alpha")}

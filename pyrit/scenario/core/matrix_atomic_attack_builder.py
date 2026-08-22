@@ -153,18 +153,34 @@ def resolve_technique_factories(
 
     Returns:
         dict[str, AttackTechniqueFactory]: Mapping of technique name to factory, ordered by
-        the selected techniques.
+        the selected techniques. Techniques with no registered factory are skipped with a
+        warning naming them, so the caller can proceed with whatever techniques exist.
     """
     from pyrit.registry.components.attack_technique_registry import AttackTechniqueRegistry
 
     all_factories = dict(AttackTechniqueRegistry.get_registry_singleton().get_factories_or_raise())
     if extra_factories:
         all_factories.update(extra_factories)
-    return {
-        technique.value: all_factories[technique.value]
-        for technique in context.scenario_techniques
-        if technique.value in all_factories
-    }
+
+    resolved: dict[str, AttackTechniqueFactory] = {}
+    missing: list[str] = []
+    seen_missing: set[str] = set()
+    for technique in context.scenario_techniques:
+        if technique.value in all_factories:
+            resolved[technique.value] = all_factories[technique.value]
+        elif technique.value not in seen_missing:
+            missing.append(technique.value)
+            seen_missing.add(technique.value)
+
+    if missing:
+        logger.warning(
+            "Skipping %d selected attack technique(s) with no registered factory: %s. "
+            "Register the technique(s) (or pass them via extra_factories) to include them in the run.",
+            len(missing),
+            ", ".join(missing),
+        )
+
+    return resolved
 
 
 def build_matrix_atomic_attacks(
