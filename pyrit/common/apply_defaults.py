@@ -106,6 +106,16 @@ class GlobalDefaultValues:
             parameter_name=parameter_name,
             include_subclasses=include_subclasses,
         )
+        # A re-registration under the opposite flag replaces the previous one
+        # entirely; keeping both would leave the older value reachable (the
+        # lookup checks the include_subclasses=True scope first) and subclasses
+        # stuck inheriting it.
+        opposite_scope = DefaultValueScope(
+            class_type=class_type,
+            parameter_name=parameter_name,
+            include_subclasses=not include_subclasses,
+        )
+        self._default_values.pop(opposite_scope, None)
         self._default_values[scope] = value
         logger.debug(f"Set default value for {class_type.__name__}.{parameter_name} = {value}")
 
