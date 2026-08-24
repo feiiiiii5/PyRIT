@@ -386,6 +386,9 @@ def print_scenario_run_summary(*, run: ScenarioRunSummary) -> None:
     if run.techniques_used:
         print(f"  Techniques:     {', '.join(run.techniques_used)}")
 
+    if run.skipped_techniques:
+        print(f"  Skipped:        {', '.join(run.skipped_techniques)} (no registered factory)")
+
     if run.failed_attacks:
         print(f"\n  Failed Attacks ({len(run.failed_attacks)}):")
         for failed in run.failed_attacks:

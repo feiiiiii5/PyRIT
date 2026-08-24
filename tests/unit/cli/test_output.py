@@ -541,6 +541,24 @@ def test_print_scenario_run_summary_completed(capsys):
     assert "Completed:" not in captured.out
 
 
+def test_print_scenario_run_summary_lists_skipped_techniques(capsys):
+    run = _make_run(
+        scenario_name="partial",
+        scenario_result_id="id",
+        status=ScenarioRunState.COMPLETED,
+        total_attacks=2,
+        completed_attacks=2,
+        objective_achieved_rate=50,
+        techniques_used=["s1"],
+        skipped_techniques=["ghost_tech"],
+    )
+    _output.print_scenario_run_summary(run=run)
+    captured = capsys.readouterr()
+    assert "Skipped:" in captured.out
+    assert "ghost_tech" in captured.out
+    assert "no registered factory" in captured.out
+
+
 def test_print_scenario_run_summary_with_error(capsys):
     run = _make_run(
         scenario_name="failing",

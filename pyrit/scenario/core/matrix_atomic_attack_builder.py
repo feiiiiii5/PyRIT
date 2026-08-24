@@ -29,6 +29,17 @@ from pyrit.prompt_normalizer import ConverterConfiguration
 from pyrit.scenario.core.atomic_attack import AtomicAttack
 from pyrit.scenario.core.attack_technique import AttackTechnique
 
+
+class TechniqueResolutionError(ValueError):
+    """
+    Raised when a scenario selects techniques but none of them resolve to a factory.
+
+    Subclasses ``ValueError`` so existing ``except ValueError`` handlers keep working,
+    mirroring ``DatasetConstraintError``. Partial misses (some techniques resolve)
+    only warn, so a run still proceeds with the techniques that do exist.
+    """
+
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
@@ -155,6 +166,10 @@ def resolve_technique_factories(
         dict[str, AttackTechniqueFactory]: Mapping of technique name to factory, ordered by
         the selected techniques. Techniques with no registered factory are skipped with a
         warning naming them, so the caller can proceed with whatever techniques exist.
+
+    Raises:
+        TechniqueResolutionError: If the selection is nonempty but no technique resolves,
+            since running only the baseline would silently defeat the selection.
     """
     from pyrit.registry.components.attack_technique_registry import AttackTechniqueRegistry
 
@@ -178,6 +193,15 @@ def resolve_technique_factories(
             "Register the technique(s) (or pass them via extra_factories) to include them in the run.",
             len(missing),
             ", ".join(missing),
+        )
+
+    if context.scenario_techniques and not resolved:
+        # A nonempty selection that resolves to nothing would otherwise run the
+        # baseline only while reporting success — a silently empty evaluation.
+        raise TechniqueResolutionError(
+            f"All {len(context.scenario_techniques)} selected attack technique(s) have no registered "
+            f"factory: {', '.join(missing)}. Register the technique(s) (or pass them via "
+            "extra_factories) so the run has at least one technique to execute."
         )
 
     return resolved

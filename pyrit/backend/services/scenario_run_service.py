@@ -599,6 +599,18 @@ class ScenarioRunService:
         completed_attacks = total_attacks
         techniques_used = scenario_result.get_techniques_used()
 
+        # Techniques the user selected but that never produced an attack cell were
+        # skipped during resolution (no registered factory for them). Compare against
+        # the built display groups rather than executed results so in-progress runs
+        # don't report not-yet-run techniques as skipped.
+        selected = set(scenario_result.scenario_identifier.techniques or [])
+        built_labels = set(scenario_result.display_group_map.values())
+        skipped_techniques = sorted(
+            technique
+            for technique in selected
+            if technique not in built_labels and not any(technique in label for label in built_labels)
+        )
+
         # Surface per-attack errors and retry pressure regardless of overall run status:
         # a COMPLETED scenario can still hide errored objectives or rate-limit retries.
         failed_attacks: list[AttackErrorSummary] = []
@@ -641,6 +653,7 @@ class ScenarioRunService:
             error=error,
             error_type=error_type,
             techniques_used=techniques_used,
+            skipped_techniques=skipped_techniques,
             total_attacks=total_attacks,
             completed_attacks=completed_attacks,
             objective_achieved_rate=scenario_result.objective_achieved_rate(),

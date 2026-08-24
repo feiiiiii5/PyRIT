@@ -27,6 +27,7 @@ from pyrit.scenario.core.attack_technique_factory import AttackTechniqueFactory
 from pyrit.scenario.core.matrix_atomic_attack_builder import (
     MatrixAtomicAttackBuilder,
     MatrixCombo,
+    TechniqueResolutionError,
     build_baseline_atomic_attack,
     build_matrix_atomic_attacks,
     resolve_technique_factories,
@@ -431,6 +432,28 @@ class TestResolveTechniqueFactories:
         ):
             resolve_technique_factories(context=context)
         assert not [record for record in caplog.records if record.levelno == logging.WARNING]
+
+    def test_raises_when_all_selected_techniques_missing(self):
+        """A nonempty selection resolving to nothing must fail loudly, not run baseline-only."""
+        factories = {"alpha": _mock_factory(name="alpha")}
+        context = _context(techniques=[_technique("missing_a"), _technique("missing_b")])
+        with _patch_registry(factories), pytest.raises(TechniqueResolutionError, match="missing_a"):
+            resolve_technique_factories(context=context)
+
+    def test_empty_selection_resolves_without_error(self):
+        context = _context(techniques=[])
+        with _patch_registry({}):
+            assert resolve_technique_factories(context=context) == {}
+
+    def test_partial_miss_still_warns_and_continues(self, caplog):
+        factories = {"alpha": _mock_factory(name="alpha")}
+        context = _context(techniques=[_technique("alpha"), _technique("missing")])
+        with (
+            _patch_registry(factories),
+            caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.matrix_atomic_attack_builder"),
+        ):
+            resolved = resolve_technique_factories(context=context)
+        assert list(resolved.keys()) == ["alpha"]
 
     def test_warning_lists_each_missing_technique_once_in_selection_order(self, caplog):
         factories = {"alpha": _mock_factory(name="alpha")}
