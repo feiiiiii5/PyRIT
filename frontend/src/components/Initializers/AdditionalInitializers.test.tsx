@@ -162,6 +162,32 @@ describe('AdditionalInitializers', () => {
     expect(screen.getByText('tags (list[str], optional)')).toBeInTheDocument()
   })
 
+  it('should disable Edit while the initializer catalog is unavailable', () => {
+    render(
+      <TestWrapper>
+        <AdditionalInitializers {...defaultProps} catalogAvailable={false} />
+      </TestWrapper>,
+    )
+
+    const editButtons = screen.getAllByRole('button', { name: 'Edit' })
+    expect(editButtons.length).toBeGreaterThan(0)
+    editButtons.forEach((button) => expect(button).toBeDisabled())
+    // The row explains why editing is unavailable instead of failing silently on save.
+    expect(screen.getAllByText(/editing is disabled until it reloads/i).length).toBeGreaterThan(0)
+  })
+
+  it('should keep Apply and Remove usable while the initializer catalog is unavailable', () => {
+    render(
+      <TestWrapper>
+        <AdditionalInitializers {...defaultProps} catalogAvailable={false} />
+      </TestWrapper>,
+    )
+
+    const row = screen.getByTestId('initializer-row-additional-2')
+    expect(within(row).getByRole('button', { name: 'Apply now' })).toBeEnabled()
+    expect(within(row).getByRole('button', { name: 'Remove' })).toBeEnabled()
+  })
+
   it('should show the saved parameters read-only without an inline editor', () => {
     render(
       <TestWrapper>

@@ -41,6 +41,7 @@ interface AdditionalInitializersProps {
 interface AdditionalInitializerCardProps {
   item: AdditionalInitializerSetting
   initializer: RegisteredInitializer
+  catalogAvailable: boolean
   isSaving: boolean
   isApplying: boolean
   isDeleting: boolean
@@ -54,6 +55,7 @@ interface AdditionalInitializerCardProps {
 function AdditionalInitializerCard({
   item,
   initializer,
+  catalogAvailable,
   isSaving,
   isApplying,
   isDeleting,
@@ -94,6 +96,11 @@ function AdditionalInitializerCard({
               Required env vars: {initializer.required_env_vars.join(', ')}
             </Text>
           )}
+          {!catalogAvailable && (
+            <Text className={styles.envVarText}>
+              Initializer catalog is unavailable; editing is disabled until it reloads.
+            </Text>
+          )}
         </div>
       </div>
 
@@ -111,7 +118,7 @@ function AdditionalInitializerCard({
       </div>
 
       <div className={styles.actionsRow}>
-        <Button appearance="primary" onClick={() => setEditOpen(true)} disabled={isBusy}>
+        <Button appearance="primary" onClick={() => setEditOpen(true)} disabled={isBusy || !catalogAvailable}>
           Edit
         </Button>
         <Button
@@ -240,6 +247,7 @@ export default function AdditionalInitializers({
               key={`${item.id}:${formatInitializerParameters(item.parameters)}:${item.order_index ?? ''}`}
               item={item}
               initializer={resolveRegisteredInitializer(item.initializer_name, registeredInitializers, catalogAvailable)}
+              catalogAvailable={catalogAvailable}
               isSaving={savingInitializerId === item.id}
               isApplying={applyingInitializerId === item.id}
               isDeleting={deletingInitializerId === item.id}
