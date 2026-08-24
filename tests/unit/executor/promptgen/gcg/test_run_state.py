@@ -49,6 +49,11 @@ class TestOptimizationRunState:
         assert state.runtime == 0.0
         assert state.stop_reason is None
 
+    def test_candidate_loss_defaults_to_none(self) -> None:
+        state = OptimizationRunState(control="c", best_control="c", loss=1e6, best_loss=1e6)
+
+        assert state.candidate_loss is None
+
 
 class TestProgressiveScheduleState:
     def test_defaults(self) -> None:
@@ -86,21 +91,38 @@ class TestMultiPromptRunStateTracking:
         assert state.stop_reason == StopReason.ALL_PROMPTS_JAILBROKEN
         attack.step.assert_not_called()
 
-    def test_rejected_candidate_keeps_active_suffix_but_updates_loss(self) -> None:
+    def test_rejected_candidate_keeps_active_suffix_and_loss(self) -> None:
         attack = _bare_multi_prompt_attack([("better", 1.0), ("worse", 5.0)])
         random.seed(2026)
 
         control, loss, steps = attack.run(n_steps=2, prev_loss=2.0, stop_on_success=False, anneal=True)
 
         # The worse candidate must be rejected by annealing with overwhelming
-        # probability under this seed; the active suffix stays "better".
+        # probability under this seed; the active suffix stays "better" and the
+        # reported loss stays paired with it. The rejected candidate's loss is
+        # still observable through ``candidate_loss``.
         assert control == "better"
         assert steps == 2
         state: OptimizationRunState = attack.last_run_state
         assert state.best_control == "better"
         assert state.best_loss == 1.0
-        assert state.loss == 5.0
+        assert state.control == "better"
+        assert state.loss == 1.0
+        assert state.candidate_loss == 5.0
         assert state.stop_reason == StopReason.MAX_STEPS_REACHED
+
+    def test_failed_run_clears_stale_last_run_state(self) -> None:
+        attack = _bare_multi_prompt_attack([("better", 1.0)])
+        stale = OptimizationRunState(control="stale", best_control="stale", loss=0.1, best_loss=0.1)
+        attack.last_run_state = stale
+        attack.step = MagicMock(side_effect=RuntimeError("model exploded"))
+
+        with pytest.raises(RuntimeError, match="model exploded"):
+            attack.run(n_steps=3, stop_on_success=False)
+
+        # A run that raises mid-loop must not leave the previous run's state
+        # looking current.
+        assert attack.last_run_state is None
 
     def test_periodic_checkpoint_restores_active_suffix(self) -> None:
         attack = _bare_multi_prompt_attack([("better", 1.0), ("best-yet", 0.25)])
@@ -228,3 +250,17 @@ class TestProgressiveRunScheduleState:
             filter_cand=True,
             verbose=True,
         )
+
+    def test_schedule_loss_carried_on_schedule_object(self) -> None:
+        # The loss fed back between progressive rounds lives on the schedule
+        # state (not a loose local), so ``last_schedule_state.loss`` reflects
+        # the final inner run instead of staying at its ``inf`` default.
+        inner_attack = MagicMock()
+        inner_attack.run.return_value = ("ctrl", 0.75, 3)
+        progressive = self._bare_progressive_attack(inner_attack)
+
+        progressive.run(n_steps=6, stop_on_success=False)
+
+        schedule: ProgressiveScheduleState = progressive.last_schedule_state
+        assert schedule.steps_completed == 6
+        assert schedule.loss == 0.75
