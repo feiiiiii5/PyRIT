@@ -1523,7 +1523,13 @@ class ProgressiveMultiPromptAttack:
 
         # The inner run must have produced a measurable loss whenever any
         # optimization happened; guards against silent carry-over regressions.
-        if schedule.steps_completed > 0:
+        # When the step budget is exhausted, `schedule.loss` may legitimately
+        # still be `inf`: the loop below only resets it to `inf` when admitting
+        # the next goal/worker, and a exhausted budget exits before the next
+        # inner run gets a chance to update it (see progressive-run admission
+        # above). Requiring a measurable loss only while budget remains keeps
+        # the guard without crashing a valid budget-exhausted run.
+        if schedule.steps_completed > 0 and schedule.steps_completed < n_steps:
             assert not math.isinf(schedule.loss), "schedule.loss was never updated by the inner run"
 
         self.last_schedule_state = schedule

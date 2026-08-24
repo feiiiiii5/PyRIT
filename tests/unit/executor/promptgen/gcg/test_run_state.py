@@ -3,6 +3,7 @@
 
 """Tests for typed optimization-iteration state in the GCG attack loop."""
 
+import math
 import random
 from typing import Any
 from unittest.mock import MagicMock
@@ -264,3 +265,40 @@ class TestProgressiveRunScheduleState:
         schedule: ProgressiveScheduleState = progressive.last_schedule_state
         assert schedule.steps_completed == 6
         assert schedule.loss == 0.75
+
+    # romanlutz review: an inner run that consumes the entire remaining step
+    # budget while another goal is still waiting to be admitted resets
+    # `schedule.loss` to inf when admitting it, then exits the loop — the old
+    # "loss was never updated" assertion crashed such a valid run instead of
+    # returning. The guard now only applies while budget remains.
+    def test_budget_exhausted_with_pending_goal_does_not_crash(self) -> None:
+        inner_attack = MagicMock()
+        # goals_admitted starts at 1 (progressive_goals); the first inner run
+        # consumes all 3 steps exactly, then the second goal is admitted and
+        # its loss reset to inf before the loop exits on the exhausted budget.
+        inner_attack.run.return_value = ("ctrl", 0.75, 3)
+        progressive = object.__new__(ProgressiveMultiPromptAttack)
+        progressive.goals = ["goal1", "goal2"]
+        progressive.targets = ["target1", "target2"]
+        progressive.workers = [MagicMock()]
+        progressive.test_goals = []
+        progressive.test_targets = []
+        progressive.test_workers = []
+        progressive.test_prefixes = []
+        progressive.managers = {"MPA": MagicMock(return_value=inner_attack)}
+        progressive.control = "initial"
+        progressive.logfile = None
+        progressive.progressive_goals = True
+        progressive.progressive_models = False
+        progressive.strategy = None
+
+        control, steps = progressive.run(n_steps=3, stop_on_success=False)
+
+        assert (control, steps) == ("ctrl", 3)
+        schedule: ProgressiveScheduleState = progressive.last_schedule_state
+        assert schedule.steps_completed == 3
+        # The second goal was admitted exactly as the budget ran out: its loss
+        # is still inf (no inner run ever scored it), but the run must return
+        # rather than trip the old assertion.
+        assert schedule.goals_admitted == 2
+        assert math.isinf(schedule.loss)
