@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import type { ChangeEvent } from 'react'
 import {
   Button,
   Drawer,
@@ -14,6 +15,7 @@ import {
   useRestoreFocusSource,
   useRestoreFocusTarget,
 } from '@fluentui/react-components'
+import type { SwitchOnChangeData } from '@fluentui/react-components'
 import { AddRegular, ArrowDownloadRegular, PanelRightRegular } from '@fluentui/react-icons'
 import MessageList from './MessageList'
 import SystemPromptBanner from './SystemPromptBanner'
@@ -30,12 +32,38 @@ import { toApiError } from '../../services/errors'
 import { buildMessagePieces, backendMessagesToFrontend } from '../../utils/messageMapper'
 import { exportConversation } from '../../utils/conversationExport'
 import type { ExportFormat } from '../../utils/conversationExport'
-import type { Message, MessageAttachment, TargetInstance, TargetInfo } from '../../types'
-import { targetInfoMatchesTarget } from '../../utils/targetIdentity'
+import type {
+  AttackTargetResolutionStatus,
+  Message,
+  MessageAttachment,
+  TargetInstance,
+  TargetInfo,
+} from '../../types'
+import { isTargetResolutionBlocking, targetInfoMatchesTarget } from '../../utils/targetIdentity'
 import type { ViewName } from '../Sidebar/Navigation'
 import { useChatWindowStyles } from './ChatWindow.styles'
 
 const NARROW_SCREEN_QUERY = '(max-width: 600px)'
+const MARKDOWN_PREFERENCE_STORAGE_KEY = 'pyrit.chatMarkdownMode'
+
+function readStoredMarkdownPreference(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    const storedPreference = window.localStorage.getItem(MARKDOWN_PREFERENCE_STORAGE_KEY)
+    return storedPreference === 'markdown'
+  } catch {
+    return false
+  }
+}
+
+function persistMarkdownPreference(enabled: boolean): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(MARKDOWN_PREFERENCE_STORAGE_KEY, enabled ? 'markdown' : 'raw')
+  } catch {
+    /* localStorage may be unavailable (private mode, quota, sandboxed iframe). */
+  }
+}
 
 function matchesNarrowScreen(): boolean {
   return typeof window !== 'undefined'
@@ -58,6 +86,10 @@ interface ChatWindowProps {
   attackLabels?: Record<string, string> | null
   /** Target info that the current attack was started with (for cross-target guard). */
   attackTarget?: TargetInfo | null
+  /** Result of resolving the persisted attack target against the current registry. */
+  targetResolutionStatus?: AttackTargetResolutionStatus
+  /** Re-run target registry resolution after a transient or unavailable result. */
+  onRetryTargetResolution?: () => void
   /** True while a historical attack is being loaded from the history view. */
   isLoadingAttack?: boolean
   /** Number of related (non-main) conversations in the loaded attack. */
@@ -77,6 +109,8 @@ export default function ChatWindow({
   onNavigate,
   attackLabels,
   attackTarget,
+  targetResolutionStatus = 'idle',
+  onRetryTargetResolution,
   isLoadingAttack,
   relatedConversationCount,
 }: ChatWindowProps) {
@@ -94,8 +128,8 @@ export default function ChatWindow({
   const [isPanelOpen, setIsPanelOpen] = useState(false)
   const [isNarrowScreen, setIsNarrowScreen] = useState(matchesNarrowScreen)
   const [isConverterPanelOpen, setIsConverterPanelOpen] = useState(false)
-  // Conversation-wide default for rendering message text as Markdown.
-  const [globalMarkdown, setGlobalMarkdown] = useState(false)
+  // Conversation-wide preference for rendering message text as Markdown.
+  const [globalMarkdown, setGlobalMarkdown] = useState(() => readStoredMarkdownPreference())
   const [chatInputText, setChatInputText] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
   const [attachmentTypes, setAttachmentTypes] = useState<string[]>([])
@@ -103,6 +137,14 @@ export default function ChatWindow({
   const [pieceConversions, setPieceConversions] = useState<Record<string, PieceConversion>>({})
   const [panelRefreshKey, setPanelRefreshKey] = useState(0)
   const inputBoxRef = useRef<ChatInputAreaHandle>(null)
+
+  const handleMarkdownChange = useCallback((
+    _event: ChangeEvent<HTMLInputElement>,
+    data: SwitchOnChangeData,
+  ): void => {
+    setGlobalMarkdown(data.checked)
+    persistMarkdownPreference(data.checked)
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -176,6 +218,25 @@ export default function ChatWindow({
   const pendingUserMessagesRef = useRef<Map<string, Message[]>>(new Map())
 
   const supportsSystemPrompt = activeTarget?.capabilities?.supports_system_prompt === true
+  const isTargetResolutionLocked = Boolean(
+    attackResultId
+    && isTargetResolutionBlocking(targetResolutionStatus),
+  )
+  const currentOperator = labels?.operator
+  const attackOperator = attackLabels?.operator
+  // Existing attacks are operator-locked when their operator differs from the current one.
+  const isOperatorLocked = Boolean(
+    attackResultId && attackLabels && attackOperator && currentOperator && attackOperator !== currentOperator,
+  )
+  // They are cross-target locked when the selected target's canonical hash differs from the persisted target.
+  const isCrossTargetLocked = Boolean(
+    attackResultId
+    && attackTarget
+    && activeTarget
+    && !targetInfoMatchesTarget(attackTarget, activeTarget),
+  )
+  // Any failed invariant keeps all mutation controls and handlers read-only.
+  const isMutationLocked = isOperatorLocked || isCrossTargetLocked || isTargetResolutionLocked
 
   // Clear internal messages when attack state is reset (e.g. New Attack).
   // Uses the "adjust state during render" pattern (see React docs:
@@ -269,7 +330,13 @@ export default function ChatWindow({
   }, [attackResultId, activeConversationId, isNarrowScreen, onSelectConversation, loadConversation])
 
   const handleSend = async (originalValue: string, convertedValue: string | undefined, attachments: MessageAttachment[]) => {
-    if (!activeTarget) { return }
+    if (
+      !activeTarget
+      || isLoadingAttack
+      || isMutationLocked
+    ) {
+      return
+    }
 
     // Capture all piece conversions upfront before any async work or state clears
     const conversions = { ...activePieceConversions }
@@ -467,7 +534,7 @@ export default function ChatWindow({
   }
 
   const handleNewConversation = useCallback(async () => {
-    if (!attackResultId) { return }
+    if (!attackResultId || isMutationLocked) { return }
 
     try {
       const response = await attacksApi.createConversation(attackResultId, {})
@@ -476,27 +543,41 @@ export default function ChatWindow({
     } catch {
       // Silently fail
     }
-  }, [attackResultId, isNarrowScreen, onSelectConversation])
+  }, [
+    attackResultId,
+    isNarrowScreen,
+    isMutationLocked,
+    onSelectConversation,
+  ])
 
   // -------------------------------------------------------------------
   // Message action handlers (4 buttons on each assistant message)
   // -------------------------------------------------------------------
 
+  const copyMessageToInput = useCallback((message: Message): void => {
+    const inputBox = inputBoxRef.current
+    if (!inputBox) { return }
+
+    if (message.content) {
+      inputBox.setText(message.content)
+    }
+    for (const attachment of message.attachments ?? []) {
+      if (attachment.type !== 'file') {
+        inputBox.addAttachment(attachment)
+      }
+    }
+  }, [])
+
   /** 1. Copy the clicked message's content/attachments into the current conversation's input box */
   const handleCopyToInput = useCallback((messageIndex: number) => {
     const msg = messages[messageIndex]
     if (!msg) { return }
-    if (msg.content) { inputBoxRef.current?.setText(msg.content) }
-    if (msg.attachments) {
-      msg.attachments.filter(a => a.type !== 'file').forEach(att => {
-        inputBoxRef.current?.addAttachment(att)
-      })
-    }
-  }, [messages])
+    copyMessageToInput(msg)
+  }, [copyMessageToInput, messages])
 
   /** 2. Create a new conversation in the same attack and copy ONLY this message to its input box */
   const handleCopyToNewConversation = useCallback(async (messageIndex: number) => {
-    if (!attackResultId) { return }
+    if (!attackResultId || isMutationLocked) { return }
     const msg = messages[messageIndex]
     if (!msg) { return }
 
@@ -506,22 +587,30 @@ export default function ChatWindow({
       setIsPanelOpen(!isNarrowScreen)
       // Small delay so the panel/messages update first
       setTimeout(() => {
-        if (msg.content) inputBoxRef.current?.setText(msg.content)
-        if (msg.attachments) {
-          msg.attachments.filter(a => a.type !== 'file').forEach(att => {
-            inputBoxRef.current?.addAttachment(att)
-          })
-        }
+        copyMessageToInput(msg)
       }, 100)
     } catch {
       // If creating fails, fall back to current conversation
       if (msg.content) inputBoxRef.current?.setText(msg.content)
     }
-  }, [attackResultId, isNarrowScreen, messages, onSelectConversation])
+  }, [
+    attackResultId,
+    copyMessageToInput,
+    isNarrowScreen,
+    isMutationLocked,
+    messages,
+    onSelectConversation,
+  ])
 
   /** 3. Branch into a new conversation within the same attack (clone up to clicked message) */
   const handleBranchConversation = useCallback(async (messageIndex: number) => {
-    if (!attackResultId || !activeConversationId) { return }
+    if (
+      !attackResultId
+      || !activeConversationId
+      || isMutationLocked
+    ) {
+      return
+    }
 
     try {
       const response = await attacksApi.createConversation(attackResultId, {
@@ -537,7 +626,13 @@ export default function ChatWindow({
     } catch (err) {
       console.error('Failed to branch into new conversation:', err)
     }
-  }, [attackResultId, activeConversationId, isNarrowScreen, onSelectConversation])
+  }, [
+    attackResultId,
+    activeConversationId,
+    isNarrowScreen,
+    isMutationLocked,
+    onSelectConversation,
+  ])
 
   /** 4. Branch into a brand-new attack (clone up to clicked message with new labels) */
   const handleBranchAttack = useCallback(async (messageIndex: number) => {
@@ -562,7 +657,12 @@ export default function ChatWindow({
   }, [activeTarget, activeConversationId, labels, onConversationCreated])
 
   const handleChangeMainConversation = useCallback(async (convId: string) => {
-    if (!attackResultId) { return }
+    if (
+      !attackResultId
+      || isMutationLocked
+    ) {
+      return
+    }
 
     try {
       await attacksApi.changeMainConversation(attackResultId, convId)
@@ -570,27 +670,12 @@ export default function ChatWindow({
     } catch (err) {
       console.error('Failed to change main conversation:', err)
     }
-  }, [attackResultId])
+  }, [
+    attackResultId,
+    isMutationLocked,
+  ])
 
   const singleTurnLimitReached = activeTarget?.capabilities?.supports_multi_turn === false && messages.some(m => m.role === 'user')
-
-  // Operator locking: if the loaded attack's operator differs from the current
-  // user's operator label, the conversation should be read-only.
-  const currentOperator = labels?.operator
-  const attackOperator = attackLabels?.operator
-  const isOperatorLocked = Boolean(
-    attackResultId && attackLabels && attackOperator && currentOperator && attackOperator !== currentOperator
-  )
-
-  // Cross-target guard: if viewing a historical attack whose target differs
-  // from the currently configured target, prevent sending new messages.
-  // The user can "Continue with your target" to branch into a new attack with their target.
-  const isCrossTargetLocked = Boolean(
-    attackResultId &&
-    attackTarget &&
-    activeTarget &&
-    !targetInfoMatchesTarget(attackTarget, activeTarget)
-  )
 
   // "Continue with your target" — clone the current conversation into a new attack
   const handleUseAsTemplate = useCallback(async () => {
@@ -654,7 +739,7 @@ export default function ChatWindow({
         />
       )}
       <div className={styles.chatArea} data-testid="chat-area">
-        <div className={styles.ribbon} data-tour="chat-area">
+        <div className={styles.ribbon}>
           <div className={styles.conversationInfo}>
             {activeTarget ? (
               <TargetBadge target={activeTarget} />
@@ -671,7 +756,7 @@ export default function ChatWindow({
             <Tooltip content="Render all messages as Markdown by default" relationship="label">
               <Switch
                 checked={globalMarkdown}
-                onChange={(_ev, data) => setGlobalMarkdown(data.checked)}
+                onChange={handleMarkdownChange}
                 label="Markdown"
                 data-testid="global-markdown-toggle"
               />
@@ -739,7 +824,7 @@ export default function ChatWindow({
           isLoading={isLoadingAttack || isLoadingMessages || awaitingConversationLoad}
           isSingleTurn={activeTarget?.capabilities?.supports_multi_turn === false}
           isOperatorLocked={isOperatorLocked}
-          isCrossTarget={isCrossTargetLocked}
+          isCrossTarget={isCrossTargetLocked || isTargetResolutionLocked}
           noTargetSelected={!activeTarget}
           globalMarkdown={globalMarkdown}
         />
@@ -750,12 +835,20 @@ export default function ChatWindow({
           supportsSystemPrompt={supportsSystemPrompt}
           systemPrompt={systemPrompt}
           onSystemPromptChange={setSystemPrompt}
-          disabled={isSending || !activeTarget || singleTurnLimitReached || isOperatorLocked || isCrossTargetLocked}
+          disabled={
+            isSending
+            || !activeTarget
+            || isLoadingAttack
+            || singleTurnLimitReached
+            || isMutationLocked
+          }
           activeTarget={activeTarget}
           singleTurnLimitReached={singleTurnLimitReached}
           onNewConversation={handleNewConversation}
           operatorLocked={isOperatorLocked}
           crossTargetLocked={isCrossTargetLocked}
+          targetResolutionStatus={targetResolutionStatus}
+          onRetryTargetResolution={onRetryTargetResolution}
           onUseAsTemplate={handleUseAsTemplate}
           attackOperator={isOperatorLocked ? attackOperator ?? undefined : undefined}
           noTargetSelected={!activeTarget}
@@ -819,6 +912,7 @@ export default function ChatWindow({
             !activeTarget ? 'Configure a target to enable this action.'
             : isOperatorLocked ? 'Cannot modify — attack belongs to a different operator.'
             : isCrossTargetLocked ? 'Cannot modify — attack was created with a different target.'
+            : isTargetResolutionLocked ? 'Cannot modify — the attack target could not be safely resolved.'
             : undefined
           }
           refreshKey={panelRefreshKey}
