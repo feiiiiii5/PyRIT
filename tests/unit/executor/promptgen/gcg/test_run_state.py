@@ -85,11 +85,32 @@ class TestMultiPromptRunStateTracking:
 
         control, loss, steps = attack.run(n_steps=5, stop_on_success=True)
 
-        assert (control, loss, steps) == ("initial", 1e6, 0)
+        # The unmeasured seed loss passes through honestly instead of a
+        # sentinel; nothing stepped, so the incoming loss is still current.
+        assert (control, loss, steps) == ("initial", float("inf"), 0)
         state: OptimizationRunState = attack.last_run_state
         assert state.steps_completed == 0
         assert state.stop_reason == StopReason.ALL_PROMPTS_JAILBROKEN
         attack.step.assert_not_called()
+
+    def test_rejected_first_candidate_does_not_dethrone_seed(self) -> None:
+        # With ``prev_loss=1.0`` and a rejected candidate at ``10.0``, the run
+        # must keep reporting the starting suffix with its real loss; the
+        # rejected candidate must not become the best result just because a
+        # sentinel used to be larger.
+        attack = _bare_multi_prompt_attack([("worse", 10.0)])
+
+        control, loss, steps = attack.run(n_steps=1, prev_loss=1.0, stop_on_success=False, anneal=True)
+
+        assert control == "initial"
+        assert loss == 1.0
+        assert steps == 1
+        state: OptimizationRunState = attack.last_run_state
+        assert state.control == "initial"
+        assert state.loss == 1.0
+        assert state.candidate_loss == 10.0
+        assert state.best_control == "initial"
+        assert state.best_loss == 1.0
 
     def test_rejected_candidate_keeps_active_suffix_and_loss(self) -> None:
         attack = _bare_multi_prompt_attack([("better", 1.0), ("worse", 5.0)])
@@ -264,3 +285,89 @@ class TestProgressiveRunScheduleState:
         schedule: ProgressiveScheduleState = progressive.last_schedule_state
         assert schedule.steps_completed == 6
         assert schedule.loss == 0.75
+
+    def test_failed_rerun_clears_stale_schedule_state_before_setup(self, monkeypatch) -> None:
+        inner_attack = MagicMock()
+        inner_attack.run.return_value = ("ctrl", 0.5, 2)
+        progressive = self._bare_progressive_attack(inner_attack)
+
+        progressive.run(n_steps=2, stop_on_success=False)
+        assert progressive.last_schedule_state is not None
+
+        # A rerun that fails during fallible setup (logfile handling happens
+        # before anything else) must not leave the previous run's schedule
+        # state looking current.
+        def _explode(logfile: Any, params: dict[str, Any]) -> None:
+            raise RuntimeError("corrupt logfile")
+
+        monkeypatch.setattr(attack_manager_mod, "_update_attack_log_params", _explode)
+
+        with pytest.raises(RuntimeError, match="corrupt logfile"):
+            progressive.run(n_steps=2, stop_on_success=False)
+
+        assert progressive.last_schedule_state is None
+
+    def test_exact_budget_goal_transition_does_not_reset_loss(self) -> None:
+        # Two progressive goals; the inner run spends the whole remaining
+        # budget exactly when the second goal would be admitted. The run must
+        # return instead of stranding an ``inf`` on the carried loss.
+        inner_attack = MagicMock()
+        inner_attack.run.return_value = ("ctrl", 0.75, 3)
+        progressive = self._bare_progressive_attack(inner_attack)
+        progressive.goals = ["goal-1", "goal-2"]
+        progressive.targets = ["target-1", "target-2"]
+
+        control, steps = progressive.run(n_steps=3, stop_on_success=False)
+
+        assert (control, steps) == ("ctrl", 3)
+        schedule: ProgressiveScheduleState = progressive.last_schedule_state
+        assert schedule.loss == 0.75
+        assert schedule.goals_admitted == 1
+
+    def test_exact_budget_worker_transition_does_not_reset_loss(self) -> None:
+        # Same as the goal case, but with goals admitted up front and a second
+        # worker waiting: an exact-budget exhaustion must skip the admission
+        # and its sentinel reset.
+        inner_attack = MagicMock()
+        inner_attack.run.return_value = ("ctrl", 0.6, 3)
+        progressive = self._bare_progressive_attack(inner_attack)
+        progressive.progressive_goals = False
+        progressive.workers = [MagicMock(), MagicMock()]
+
+        control, steps = progressive.run(n_steps=3, stop_on_success=False)
+
+        assert (control, steps) == ("ctrl", 3)
+        schedule: ProgressiveScheduleState = progressive.last_schedule_state
+        assert schedule.loss == 0.6
+        assert schedule.workers_admitted == 1
+
+    def test_exact_budget_control_weight_increase_is_skipped(self) -> None:
+        # A fully-admitted schedule that exhausts its budget must not bump the
+        # control weight (and reset the loss) for a round that never runs.
+        inner_attack = MagicMock()
+        inner_attack.run.return_value = ("ctrl", 0.8, 3)
+        progressive = self._bare_progressive_attack(inner_attack)
+        progressive.progressive_goals = False
+        progressive.progressive_models = False
+
+        control, steps = progressive.run(n_steps=3, control_weight=0.05, stop_on_success=False)
+
+        assert (control, steps) == ("ctrl", 3)
+        schedule: ProgressiveScheduleState = progressive.last_schedule_state
+        assert schedule.loss == 0.8
+        inner_attack.run.assert_called_once()
+
+    def test_control_weight_increase_still_applies_while_budget_remains(self) -> None:
+        # Guard against over-gating: with budget left after an inner round,
+        # the weight ratchet must still fire and fund the next round.
+        inner_attack = MagicMock()
+        inner_attack.run.return_value = ("ctrl", 0.8, 2)
+        progressive = self._bare_progressive_attack(inner_attack)
+        progressive.progressive_goals = False
+        progressive.progressive_models = False
+
+        control, steps = progressive.run(n_steps=4, control_weight=0.05, stop_on_success=False)
+
+        assert (control, steps) == ("ctrl", 4)
+        second_call_kwargs = inner_attack.run.call_args_list[1].kwargs
+        assert second_call_kwargs["control_weight"] == pytest.approx(0.06)

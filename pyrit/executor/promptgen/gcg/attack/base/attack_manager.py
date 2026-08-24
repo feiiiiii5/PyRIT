@@ -1052,11 +1052,15 @@ class MultiPromptAttack:
         # run's state looking current.
         self.last_run_state = None
 
+        # Seed both losses from the incoming loss: a large sentinel would pair
+        # the starting suffix with a fake loss and let a rejected first
+        # candidate take over best-tracking. ``log()`` caps the seed for
+        # readability so infinite seeds stay renderable.
         state = OptimizationRunState(
             control=self.control_str,
             best_control=self.control_str,
-            loss=1e6,
-            best_loss=1e6,
+            loss=prev_loss,
+            best_loss=prev_loss,
         )
 
         if self.logfile is not None and log_first:
@@ -1065,7 +1069,7 @@ class MultiPromptAttack:
                 anneal_from,
                 n_steps + anneal_from,
                 self.control_str,
-                state.loss,
+                min(state.loss, 1e6),
                 state.runtime,
                 model_tests,
                 verbose=verbose,
@@ -1431,6 +1435,11 @@ class ProgressiveMultiPromptAttack:
         Returns:
             tuple[str, int]: The final control suffix and completed step count.
         """
+        # Clear eagerly, before any fallible setup work: if this rerun raises
+        # while opening or parsing the logfile, the previous run's state must
+        # not keep looking current.
+        self.last_schedule_state = None
+
         _update_attack_log_params(
             logfile=self.logfile,
             params={
@@ -1447,10 +1456,6 @@ class ProgressiveMultiPromptAttack:
                 "stop_on_success": stop_on_success,
             },
         )
-
-        # Clear eagerly: a run that raises mid-loop must not leave the previous
-        # run's state looking current.
-        self.last_schedule_state = None
 
         schedule = ProgressiveScheduleState(
             goals_admitted=1 if self.progressive_goals else len(self.goals),
@@ -1495,31 +1500,36 @@ class ProgressiveMultiPromptAttack:
             schedule.steps_completed += inner_steps
             self.control = control
 
+            # Once the step budget is spent, stop preparing further rounds:
+            # admissions and their sentinel resets would strand ``inf`` on
+            # ``schedule.loss`` for a run that legitimately ends right here.
+            prepare_next_round = schedule.steps_completed < n_steps
+
             if schedule.goals_admitted < len(self.goals):
-                schedule.goals_admitted += 1
-                schedule.loss = np.inf
-            elif schedule.goals_admitted == len(self.goals):
-                if schedule.workers_admitted < len(self.workers):
+                if prepare_next_round:
+                    schedule.goals_admitted += 1
+                    schedule.loss = np.inf
+            elif schedule.workers_admitted < len(self.workers):
+                if prepare_next_round:
                     schedule.workers_admitted += 1
                     schedule.loss = np.inf
-                elif schedule.workers_admitted == len(self.workers) and stop_on_success:
-                    self._finalize_progressive_run(
-                        attack=attack,
-                        step=schedule.steps_completed,
-                        n_steps=n_steps,
-                        loss=schedule.loss,
-                        verbose=verbose,
-                    )
-                    break
+            elif schedule.workers_admitted == len(self.workers) and stop_on_success:
+                self._finalize_progressive_run(
+                    attack=attack,
+                    step=schedule.steps_completed,
+                    n_steps=n_steps,
+                    loss=schedule.loss,
+                    verbose=verbose,
+                )
+                break
+            elif prepare_next_round and isinstance(control_weight, (int, float)) and incr_control:
+                if control_weight <= 0.09:
+                    control_weight += 0.01
+                    schedule.loss = np.inf
+                    if verbose:
+                        logger.info(f"Control weight increased to {control_weight:.5}")
                 else:
-                    if isinstance(control_weight, (int, float)) and incr_control:
-                        if control_weight <= 0.09:
-                            control_weight += 0.01
-                            schedule.loss = np.inf
-                            if verbose:
-                                logger.info(f"Control weight increased to {control_weight:.5}")
-                        else:
-                            schedule.stop_inner_on_success = False
+                    schedule.stop_inner_on_success = False
 
         # The inner run must have produced a measurable loss whenever any
         # optimization happened; guards against silent carry-over regressions.
