@@ -286,7 +286,7 @@ class TestProgressiveRunScheduleState:
         assert schedule.steps_completed == 6
         assert schedule.loss == 0.75
 
-    def test_failed_rerun_clears_stale_schedule_state_before_setup(self, monkeypatch) -> None:
+    def test_failed_rerun_clears_stale_schedule_state_before_setup(self, monkeypatch: pytest.MonkeyPatch) -> None:
         inner_attack = MagicMock()
         inner_attack.run.return_value = ("ctrl", 0.5, 2)
         progressive = self._bare_progressive_attack(inner_attack)
