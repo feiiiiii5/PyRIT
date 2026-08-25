@@ -599,16 +599,12 @@ class ScenarioRunService:
         completed_attacks = total_attacks
         techniques_used = scenario_result.get_techniques_used()
 
-        # Techniques the user selected but that never produced an attack cell were
-        # skipped during resolution (no registered factory for them). Compare against
-        # the built display groups rather than executed results so in-progress runs
-        # don't report not-yet-run techniques as skipped.
-        selected = set(scenario_result.scenario_identifier.techniques or [])
-        built_labels = set(scenario_result.display_group_map.values())
+        # Authoritative skip record persisted at resolution time by the scenario
+        # (see resolve_technique_factories). Display groups are presentation data —
+        # they group by dataset/target/template depending on the scenario, so they
+        # cannot be used to derive which factories resolved.
         skipped_techniques = sorted(
-            technique
-            for technique in selected
-            if technique not in built_labels and not any(technique in label for label in built_labels)
+            set(scenario_result.metadata.get("skipped_techniques", []) or [])
         )
 
         # Surface per-attack errors and retry pressure regardless of overall run status:

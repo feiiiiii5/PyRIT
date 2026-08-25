@@ -313,7 +313,10 @@ class Jailbreak(Scenario):
         self._resolved_jailbreaks = self._resolve_templates()
         num_attempts = self.params.get("num_jailbreak_attempts", 1)
 
-        technique_factories = resolve_technique_factories(context=context, extra_factories=_extra_default_factories())
+        resolution = resolve_technique_factories(context=context, extra_factories=_extra_default_factories())
+        technique_factories = resolution.resolved
+        # Authoritative skip record for the run summary (display groups are presentation data).
+        self._skipped_techniques = resolution.skipped
 
         # ``jailbreak_system_prompt`` is delivered separately (native system prompt, no converter);
         # every other technique goes through the inline converter path.

@@ -21,48 +21,59 @@ def _service() -> ScenarioRunService:
     return service
 
 
-def _result(*, techniques, display_groups) -> ScenarioResult:
-    return ScenarioResult(
-        scenario_identifier=ScenarioIdentifier(name="scenario", techniques=techniques),
+def _result(*, techniques, skipped, display_group_map=None) -> ScenarioResult:
+    return ScenarioResult.model_construct(
+        scenario_identifier=ScenarioIdentifier(class_name="scenario", techniques=techniques),
         attack_results={},
-        display_group_map=display_groups,
+        display_group_map=display_group_map or {},
+        metadata={"skipped_techniques": sorted(skipped)},
     )
 
 
 @pytest.mark.usefixtures("patch_central_database")
 class TestBuildResponseSkippedTechniques:
-    """Selected techniques with no built attack cell surface as ``skipped_techniques``."""
+    """``skipped_techniques`` comes from the resolution-time record the scenario persists."""
 
-    def test_selected_without_built_label_is_reported_skipped(self):
-        result = _result(techniques=["alpha", "ghost"], display_groups={"alpha::ds": "alpha"})
+    def test_persisted_skips_are_reported_verbatim(self):
+        result = _result(techniques=["alpha", "ghost"], skipped=["ghost"], display_group_map={"cell": "alpha"})
 
         summary = _service()._build_response_from_db(scenario_result=result)
 
         assert summary.skipped_techniques == ["ghost"]
-        assert summary.techniques_used is not None
 
-    def test_decorated_display_label_still_counts_as_built(self):
-        # Custom ``display_group_fn`` may decorate technique names; a label that
-        # contains the technique name must not be reported as skipped.
-        result = _result(techniques=["alpha"], display_groups={"cell-1": "alpha (hard mode)"})
+    def test_display_group_labels_do_not_affect_reporting(self):
+        """Custom display-group functions rename cells; skips must still surface verbatim."""
+        result = _result(
+            techniques=["alpha", "ghost"],
+            skipped=["ghost"],
+            display_group_map={"cell-a": "alpha (hard mode)", "cell-b": "ghost (hard mode)"},
+        )
 
         summary = _service()._build_response_from_db(scenario_result=result)
 
-        assert summary.skipped_techniques == []
+        assert summary.skipped_techniques == ["ghost"]
 
     def test_no_selection_reports_no_skips(self):
-        result = _result(techniques=None, display_groups={})
+        result = _result(techniques=None, skipped=[])
 
         summary = _service()._build_response_from_db(scenario_result=result)
 
         assert summary.skipped_techniques == []
 
     def test_skips_are_sorted_and_deduplicated(self):
-        result = _result(
-            techniques=["zeta", "alpha", "alpha"],
-            display_groups={"mid::ds": "mid"},
-        )
+        result = _result(techniques=["zeta", "alpha", "alpha"], skipped=["zeta", "alpha", "alpha"])
 
         summary = _service()._build_response_from_db(scenario_result=result)
 
         assert summary.skipped_techniques == ["alpha", "zeta"]
+
+    def test_legacy_results_without_metadata_report_no_skips(self):
+        result = ScenarioResult.model_construct(
+            scenario_identifier=ScenarioIdentifier(class_name="scenario", techniques=["x"]),
+            attack_results={},
+            metadata={},
+        )
+
+        summary = _service()._build_response_from_db(scenario_result=result)
+
+        assert summary.skipped_techniques == []

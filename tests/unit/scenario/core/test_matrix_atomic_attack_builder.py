@@ -400,14 +400,16 @@ class TestResolveTechniqueFactories:
         }
         context = _context(techniques=[_technique("beta"), _technique("alpha")])
         with _patch_registry(factories):
-            resolved = resolve_technique_factories(context=context)
+            resolved = resolve_technique_factories(context=context).resolved
+            resolved = resolve_technique_factories(context=context).resolved
         assert list(resolved.keys()) == ["beta", "alpha"]
 
     def test_drops_techniques_without_factory(self):
         factories = {"alpha": _mock_factory(name="alpha")}
         context = _context(techniques=[_technique("alpha"), _technique("missing")])
         with _patch_registry(factories):
-            resolved = resolve_technique_factories(context=context)
+            resolved = resolve_technique_factories(context=context).resolved
+            resolved = resolve_technique_factories(context=context).resolved
         assert list(resolved.keys()) == ["alpha"]
 
     def test_warns_when_dropping_techniques_without_factory(self, caplog):
@@ -443,7 +445,7 @@ class TestResolveTechniqueFactories:
     def test_empty_selection_resolves_without_error(self):
         context = _context(techniques=[])
         with _patch_registry({}):
-            assert resolve_technique_factories(context=context) == {}
+            assert resolve_technique_factories(context=context).resolved == {}
 
     def test_partial_miss_still_warns_and_continues(self, caplog):
         factories = {"alpha": _mock_factory(name="alpha")}
@@ -452,7 +454,8 @@ class TestResolveTechniqueFactories:
             _patch_registry(factories),
             caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.matrix_atomic_attack_builder"),
         ):
-            resolved = resolve_technique_factories(context=context)
+            resolved = resolve_technique_factories(context=context).resolved
+            resolved = resolve_technique_factories(context=context).resolved
         assert list(resolved.keys()) == ["alpha"]
 
     def test_warning_lists_each_missing_technique_once_in_selection_order(self, caplog):
@@ -481,11 +484,13 @@ class TestResolveTechniqueFactories:
         local_only = _mock_factory(name="local")
         context = _context(techniques=[_technique("alpha"), _technique("local")])
         with _patch_registry(registry_factories):
-            resolved = resolve_technique_factories(
+            resolution = resolve_technique_factories(
                 context=context,
                 extra_factories={"alpha": local_alpha, "local": local_only},
             )
+            resolved = resolution.resolved
         assert list(resolved.keys()) == ["alpha", "local"]
+        assert resolution.skipped == []
         assert resolved["alpha"] is local_alpha  # extra overrides the registry factory of the same name
         assert resolved["local"] is local_only  # local-only factory is selectable without global registration
 

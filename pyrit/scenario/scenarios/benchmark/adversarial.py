@@ -222,7 +222,9 @@ class AdversarialBenchmark(Scenario):
             )
 
         resolved_targets = self._resolve_adversarial_targets(target_names=target_names)
-        technique_factories = resolve_technique_factories(context=context)
+        resolution = resolve_technique_factories(context=context)
+        technique_factories = resolution.resolved
+        self._skipped_techniques = resolution.skipped
 
         builder = MatrixAtomicAttackBuilder(
             objective_target=context.objective_target,

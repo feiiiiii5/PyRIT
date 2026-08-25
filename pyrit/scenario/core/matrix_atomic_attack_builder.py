@@ -40,6 +40,23 @@ class TechniqueResolutionError(ValueError):
     """
 
 
+@dataclass(frozen=True)
+class TechniqueResolution:
+    """
+    Outcome of resolving a scenario's selected techniques to factories.
+
+    Attributes:
+        resolved (dict[str, AttackTechniqueFactory]): Factories keyed by technique
+            name, ordered by the selection.
+        skipped (list[str]): Selected techniques with no registered factory, in
+            selection order. This is the authoritative record for surfacing skips —
+            display groups are presentation data and cannot be used to derive it.
+    """
+
+    resolved: dict[str, AttackTechniqueFactory]
+    skipped: list[str]
+
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
@@ -147,7 +164,7 @@ def resolve_technique_factories(
     *,
     context: ScenarioContext,
     extra_factories: dict[str, AttackTechniqueFactory] | None = None,
-) -> dict[str, AttackTechniqueFactory]:
+) -> TechniqueResolution:
     """
     Resolve a run's selected techniques to their registered ``AttackTechniqueFactory`` instances.
 
@@ -163,9 +180,9 @@ def resolve_technique_factories(
             name.
 
     Returns:
-        dict[str, AttackTechniqueFactory]: Mapping of technique name to factory, ordered by
-        the selected techniques. Techniques with no registered factory are skipped with a
-        warning naming them, so the caller can proceed with whatever techniques exist.
+        TechniqueResolution: ``resolved`` maps technique name to factory ordered by the
+        selection; ``skipped`` lists selected techniques with no registered factory in
+        selection order (also emitted as a warning so callers proceed knowingly).
 
     Raises:
         TechniqueResolutionError: If the selection is nonempty but no technique resolves,
@@ -204,7 +221,7 @@ def resolve_technique_factories(
             "extra_factories) so the run has at least one technique to execute."
         )
 
-    return resolved
+    return TechniqueResolution(resolved=resolved, skipped=missing)
 
 
 def build_matrix_atomic_attacks(
@@ -254,7 +271,7 @@ def build_matrix_atomic_attacks(
         memory_labels=context.memory_labels,
     )
     return builder.build(
-        technique_factories=resolve_technique_factories(context=context, extra_factories=extra_factories),
+        technique_factories=resolve_technique_factories(context=context, extra_factories=extra_factories).resolved,
         dataset_groups=context.seed_groups_by_dataset,
         display_group_fn=display_group_fn,
         technique_converters=technique_converters,
