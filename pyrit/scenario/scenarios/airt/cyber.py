@@ -123,8 +123,10 @@ class Cyber(Scenario):
         Returns:
             list[AtomicAttack]: The generated atomic attacks.
         """
-        return build_matrix_atomic_attacks(
+        attacks, skipped = build_matrix_atomic_attacks(
             context=context,
             objective_scorer=self._objective_scorer,
             technique_converters=self._technique_converters,
         )
+        self._skipped_techniques = skipped
+        return attacks

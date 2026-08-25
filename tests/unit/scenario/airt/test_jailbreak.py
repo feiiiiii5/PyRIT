@@ -19,6 +19,7 @@ from pyrit.registry.components.attack_technique_registry import AttackTechniqueR
 from pyrit.registry.components.scenario_registry import ScenarioRegistry
 from pyrit.scenario.core import BaselineAttackPolicy
 from pyrit.scenario.core.attack_technique_factory import AttackTechniqueFactory
+from pyrit.scenario.core.matrix_atomic_attack_builder import TechniqueResolution
 from pyrit.scenario.scenarios.airt.jailbreak import (
     _DEFAULT_NUM_JAILBREAKS,
     _DEFAULT_TECHNIQUES,
@@ -392,7 +393,10 @@ class TestJailbreakAttackGeneration:
         self, mock_objective_target, mock_objective_scorer, mock_memory_seed_groups
     ):
         with _patch_seed_groups(mock_memory_seed_groups):
-            with patch("pyrit.scenario.scenarios.airt.jailbreak.resolve_technique_factories", return_value={}):
+            with patch(
+                "pyrit.scenario.scenarios.airt.jailbreak.resolve_technique_factories",
+                return_value=TechniqueResolution(resolved={}, skipped=[]),
+            ):
                 scenario = Jailbreak(objective_scorer=mock_objective_scorer)
                 scenario.set_params_from_args(args=_default_args(mock_objective_target, jailbreak_names=["aim.yaml"]))
                 with pytest.raises(ValueError, match="no longer available.*prompt_sending"):

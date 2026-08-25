@@ -124,9 +124,11 @@ class RapidResponse(Scenario):
         Returns:
             list[AtomicAttack]: The generated atomic attacks.
         """
-        return build_matrix_atomic_attacks(
+        attacks, skipped = build_matrix_atomic_attacks(
             context=context,
             objective_scorer=self._objective_scorer,
             display_group_fn=lambda combo: combo.dataset_name,
             technique_converters=self._technique_converters,
         )
+        self._skipped_techniques = skipped
+        return attacks

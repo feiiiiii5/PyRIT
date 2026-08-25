@@ -308,10 +308,12 @@ class Multilingual(Scenario):
         self._resolved_languages = self._resolve_languages()
         adversarial_chat = self._adversarial_chat or get_default_adversarial_target()
         strategies = set(self.params.get("translation_strategies") or [_TRANSLATION, _RANDOM_TRANSLATION])
-        technique_factories = resolve_technique_factories(
+        resolution = resolve_technique_factories(
             context=context,
             extra_factories=_extra_default_factories(),
         )
+        technique_factories = resolution.resolved
+        self._skipped_techniques = resolution.skipped
         builder = MatrixAtomicAttackBuilder(
             objective_target=context.objective_target,
             objective_scorer=self._objective_scorer,

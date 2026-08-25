@@ -496,52 +496,60 @@ class TestResolveTechniqueFactories:
 
 
 @pytest.mark.usefixtures("patch_central_database")
+@pytest.mark.usefixtures("patch_central_database")
 class TestBuildMatrixAtomicAttacks:
     """``build_matrix_atomic_attacks`` wires the context into the builder in one call."""
 
     def test_builds_cross_product_grouped_by_technique(self):
         context = _context(
             techniques=[_technique("tech")],
-            seed_groups_by_dataset={"ds": [_seed_group(objective="o1")]},
+            seed_groups_by_dataset={"ds": [_seed_group(objective="q")]},
         )
         with _patch_registry({"tech": _mock_factory(name="tech")}):
-            result = build_matrix_atomic_attacks(context=context, objective_scorer=MagicMock(spec=TrueFalseScorer))
-        assert [a.atomic_attack_name for a in result] == ["tech_ds"]
-        assert result[0].display_group == "tech"
+            attacks, skipped = build_matrix_atomic_attacks(
+                context=context, objective_scorer=MagicMock(spec=TrueFalseScorer)
+            )
+        assert [a.atomic_attack_name for a in attacks] == ["tech_ds"]
+        assert attacks[0].display_group == "tech"
+        assert skipped == []
 
     def test_custom_display_group_fn(self):
         context = _context(
             techniques=[_technique("tech")],
-            seed_groups_by_dataset={"ds": [_seed_group(objective="o1")]},
+            seed_groups_by_dataset={"ds": [_seed_group(objective="q")]},
         )
         with _patch_registry({"tech": _mock_factory(name="tech")}):
-            result = build_matrix_atomic_attacks(
+            attacks, _ = build_matrix_atomic_attacks(
                 context=context,
                 objective_scorer=MagicMock(spec=TrueFalseScorer),
                 display_group_fn=lambda combo: combo.dataset_name,
             )
-        assert result[0].display_group == "ds"
+        assert attacks[0].display_group == "ds"
 
     def test_no_baseline_emitted_when_context_disables_it(self):
         context = _context(
             techniques=[_technique("tech")],
-            seed_groups_by_dataset={"ds": [_seed_group(objective="o1")]},
+            seed_groups_by_dataset={"ds": [_seed_group(objective="q")]},
             include_baseline=False,
         )
         with _patch_registry({"tech": _mock_factory(name="tech")}):
-            result = build_matrix_atomic_attacks(context=context, objective_scorer=MagicMock(spec=TrueFalseScorer))
-        assert all(a.atomic_attack_name != "baseline" for a in result)
+            attacks, _ = build_matrix_atomic_attacks(
+                context=context, objective_scorer=MagicMock(spec=TrueFalseScorer)
+            )
+        assert all(a.atomic_attack_name != "baseline" for a in attacks)
 
     def test_baseline_emitted_when_context_enables_it(self):
         context = _context(
             techniques=[_technique("tech")],
-            seed_groups_by_dataset={"ds": [_seed_group(objective="o1")]},
+            seed_groups_by_dataset={"ds": [_seed_group(objective="q")]},
             include_baseline=True,
         )
         with _patch_registry({"tech": _mock_factory(name="tech")}):
-            result = build_matrix_atomic_attacks(context=context, objective_scorer=MagicMock(spec=TrueFalseScorer))
-        assert result[0].atomic_attack_name == "baseline"
-        assert [a.atomic_attack_name for a in result] == ["baseline", "tech_ds"]
+            attacks, _ = build_matrix_atomic_attacks(
+                context=context, objective_scorer=MagicMock(spec=TrueFalseScorer)
+            )
+        assert attacks[0].atomic_attack_name == "baseline"
+        assert [a.atomic_attack_name for a in attacks] == ["baseline", "tech_ds"]
 
     def test_technique_converters_forwarded(self):
         from pyrit.converter import Converter
@@ -553,7 +561,7 @@ class TestBuildMatrixAtomicAttacks:
         factory = _mock_factory(name="tech")
         converter = MagicMock(spec=Converter)
         with _patch_registry({"tech": factory}):
-            build_matrix_atomic_attacks(
+            attacks, _ = build_matrix_atomic_attacks(
                 context=context,
                 objective_scorer=MagicMock(spec=TrueFalseScorer),
                 technique_converters={"tech": [converter]},
@@ -563,15 +571,17 @@ class TestBuildMatrixAtomicAttacks:
         assert len(extra) == 1
 
     def test_extra_factories_used_for_selection(self):
+        local_alpha = _mock_factory(name="alpha")
+        local_only = _mock_factory(name="local")
         context = _context(
-            techniques=[_technique("local")],
-            seed_groups_by_dataset={"ds": [_seed_group(objective="o1")]},
+            techniques=[_technique("alpha"), _technique("local")],
+            seed_groups_by_dataset={"ds": [_seed_group(objective="q")]},
         )
-        # The selected technique exists only in extra_factories, not the registry.
-        with _patch_registry({"other": _mock_factory(name="other")}):
-            result = build_matrix_atomic_attacks(
+        with _patch_registry({}):
+            attacks, skipped = build_matrix_atomic_attacks(
                 context=context,
                 objective_scorer=MagicMock(spec=TrueFalseScorer),
-                extra_factories={"local": _mock_factory(name="local")},
+                extra_factories={"alpha": local_alpha, "local": local_only},
             )
-        assert [a.atomic_attack_name for a in result] == ["local_ds"]
+        assert [a.atomic_attack_name for a in attacks] == ["alpha_ds", "local_ds"]
+        assert skipped == []

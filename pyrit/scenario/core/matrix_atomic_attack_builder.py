@@ -262,21 +262,25 @@ def build_matrix_atomic_attacks(
             can offer techniques without registering them globally.
 
     Returns:
-        list[AtomicAttack]: The generated atomic attacks, baseline first when
-        ``context.include_baseline`` is set.
+        tuple[list[AtomicAttack], list[str]]: The generated atomic attacks (baseline
+        first when ``context.include_baseline`` is set) and the names of selected
+        techniques that had no registered factory, so callers can persist the
+        authoritative skip record before creating the ``ScenarioResult``.
     """
     builder = MatrixAtomicAttackBuilder(
         objective_target=context.objective_target,
         objective_scorer=objective_scorer,
         memory_labels=context.memory_labels,
     )
-    return builder.build(
-        technique_factories=resolve_technique_factories(context=context, extra_factories=extra_factories).resolved,
+    resolution = resolve_technique_factories(context=context, extra_factories=extra_factories)
+    attacks = builder.build(
+        technique_factories=resolution.resolved,
         dataset_groups=context.seed_groups_by_dataset,
         display_group_fn=display_group_fn,
         technique_converters=technique_converters,
         include_baseline=context.include_baseline,
     )
+    return attacks, resolution.skipped
 
 
 class MatrixAtomicAttackBuilder:
