@@ -371,3 +371,19 @@ class TestProgressiveRunScheduleState:
         assert (control, steps) == ("ctrl", 4)
         second_call_kwargs = inner_attack.run.call_args_list[1].kwargs
         assert second_call_kwargs["control_weight"] == pytest.approx(0.06)
+
+    def test_non_finite_inner_loss_completes_without_assertion(self) -> None:
+        # A completed inner run may legitimately report a non-finite loss
+        # (non-finite model loss or numeric overflow). The post-run invariant
+        # must track that the loss was measured rather than infer update state
+        # from the numeric value, so this run must complete normally.
+        inner_attack = MagicMock()
+        inner_attack.run.return_value = ("ctrl", float("inf"), 2)
+        progressive = self._bare_progressive_attack(inner_attack)
+
+        control, steps = progressive.run(n_steps=2, stop_on_success=False)
+
+        assert (control, steps) == ("ctrl", 2)
+        schedule: ProgressiveScheduleState = progressive.last_schedule_state
+        assert schedule.steps_completed == 2
+        assert schedule.loss == float("inf")
