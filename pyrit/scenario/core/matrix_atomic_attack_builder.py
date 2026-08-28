@@ -32,29 +32,11 @@ from pyrit.scenario.core.attack_technique import AttackTechnique
 
 class TechniqueResolutionError(ValueError):
     """
-    Raised when a scenario selects techniques but none of them resolve to a factory.
+    Raised when a selected scenario technique has no registered factory.
 
     Subclasses ``ValueError`` so existing ``except ValueError`` handlers keep working,
-    mirroring ``DatasetConstraintError``. Partial misses (some techniques resolve)
-    only warn, so a run still proceeds with the techniques that do exist.
+    mirroring ``DatasetConstraintError``.
     """
-
-
-@dataclass(frozen=True)
-class TechniqueResolution:
-    """
-    Outcome of resolving a scenario's selected techniques to factories.
-
-    Attributes:
-        resolved (dict[str, AttackTechniqueFactory]): Factories keyed by technique
-            name, ordered by the selection.
-        skipped (list[str]): Selected techniques with no registered factory, in
-            selection order. This is the authoritative record for surfacing skips —
-            display groups are presentation data and cannot be used to derive it.
-    """
-
-    resolved: dict[str, AttackTechniqueFactory]
-    skipped: list[str]
 
 
 if TYPE_CHECKING:
@@ -164,13 +146,13 @@ def resolve_technique_factories(
     *,
     context: ScenarioContext,
     extra_factories: dict[str, AttackTechniqueFactory] | None = None,
-) -> TechniqueResolution:
+) -> dict[str, AttackTechniqueFactory]:
     """
     Resolve a run's selected techniques to their registered ``AttackTechniqueFactory`` instances.
 
     Reads the ``AttackTechniqueRegistry`` singleton and keeps only the factories whose name
-    matches a selected technique, preserving selection order. Techniques with no registered
-    factory are silently dropped so the caller can proceed with whatever techniques exist.
+    matches a selected technique, preserving selection order. Raises if any selected
+    technique has no registered factory so the run cannot silently omit requested work.
 
     Args:
         context (ScenarioContext): The resolved runtime inputs for this run.
@@ -180,13 +162,11 @@ def resolve_technique_factories(
             name.
 
     Returns:
-        TechniqueResolution: ``resolved`` maps technique name to factory ordered by the
-        selection; ``skipped`` lists selected techniques with no registered factory in
-        selection order (also emitted as a warning so callers proceed knowingly).
+        dict[str, AttackTechniqueFactory]: Mapping of technique name to factory, ordered by
+        the selected techniques.
 
     Raises:
-        TechniqueResolutionError: If the selection is nonempty but no technique resolves,
-            since running only the baseline would silently defeat the selection.
+        TechniqueResolutionError: If any selected technique has no registered factory.
     """
     from pyrit.registry.components.attack_technique_registry import AttackTechniqueRegistry
 
@@ -194,34 +174,16 @@ def resolve_technique_factories(
     if extra_factories:
         all_factories.update(extra_factories)
 
-    resolved: dict[str, AttackTechniqueFactory] = {}
-    missing: list[str] = []
-    seen_missing: set[str] = set()
-    for technique in context.scenario_techniques:
-        if technique.value in all_factories:
-            resolved[technique.value] = all_factories[technique.value]
-        elif technique.value not in seen_missing:
-            missing.append(technique.value)
-            seen_missing.add(technique.value)
+    missing = list(dict.fromkeys(t.value for t in context.scenario_techniques if t.value not in all_factories))
 
     if missing:
-        logger.warning(
-            "Skipping %d selected attack technique(s) with no registered factory: %s. "
-            "Register the technique(s) (or pass them via extra_factories) to include them in the run.",
-            len(missing),
-            ", ".join(missing),
-        )
-
-    if context.scenario_techniques and not resolved:
-        # A nonempty selection that resolves to nothing would otherwise run the
-        # baseline only while reporting success — a silently empty evaluation.
         raise TechniqueResolutionError(
-            f"All {len(context.scenario_techniques)} selected attack technique(s) have no registered "
-            f"factory: {', '.join(missing)}. Register the technique(s) (or pass them via "
-            "extra_factories) so the run has at least one technique to execute."
+            "The following selected attack techniques have no registered factory: "
+            f"{', '.join(missing)}. Register the techniques (or pass them via "
+            "extra_factories) before starting the run."
         )
 
-    return TechniqueResolution(resolved=resolved, skipped=missing)
+    return {technique.value: all_factories[technique.value] for technique in context.scenario_techniques}
 
 
 def build_matrix_atomic_attacks(
@@ -231,7 +193,7 @@ def build_matrix_atomic_attacks(
     display_group_fn: Callable[[MatrixCombo], str] | None = None,
     technique_converters: dict[str, list[Converter]] | None = None,
     extra_factories: dict[str, AttackTechniqueFactory] | None = None,
-) -> tuple[list[AtomicAttack], list[str]]:
+) -> list[AtomicAttack]:
     """
     Build a matrix-shaped scenario's atomic attacks from its resolved context in one call.
 
@@ -262,25 +224,21 @@ def build_matrix_atomic_attacks(
             can offer techniques without registering them globally.
 
     Returns:
-        tuple[list[AtomicAttack], list[str]]: The generated atomic attacks (baseline
-        first when ``context.include_baseline`` is set) and the names of selected
-        techniques that had no registered factory, so callers can persist the
-        authoritative skip record before creating the ``ScenarioResult``.
+        list[AtomicAttack]: The generated atomic attacks, baseline first when
+        ``context.include_baseline`` is set.
     """
     builder = MatrixAtomicAttackBuilder(
         objective_target=context.objective_target,
         objective_scorer=objective_scorer,
         memory_labels=context.memory_labels,
     )
-    resolution = resolve_technique_factories(context=context, extra_factories=extra_factories)
-    attacks = builder.build(
-        technique_factories=resolution.resolved,
+    return builder.build(
+        technique_factories=resolve_technique_factories(context=context, extra_factories=extra_factories),
         dataset_groups=context.seed_groups_by_dataset,
         display_group_fn=display_group_fn,
         technique_converters=technique_converters,
         include_baseline=context.include_baseline,
     )
-    return attacks, resolution.skipped
 
 
 class MatrixAtomicAttackBuilder:

@@ -64,7 +64,7 @@
 # 2. **Scenario Class**: Extend `Scenario` and pass these to `super().__init__()`:
 #    - `technique_class`: Your technique enum class
 #    - Implement `_build_atomic_attacks_async(context)` — the single abstract extension point.
-#      Matrix-shaped scenarios delegate to `build_matrix_atomic_attacks(context=...)`, which returns the attacks plus the names of any selected techniques that had no registered factory.
+#      Matrix-shaped scenarios delegate to `build_matrix_atomic_attacks(context=...)` in one line.
 #
 # 3. **Default Dataset**: Pass `default_dataset_config=` to `super().__init__()` to specify the datasets your scenario uses out of the box.
 #    - Returns a `DatasetConfiguration` with one or more named datasets (e.g., `DatasetConfiguration(dataset_names=["my_dataset"])`)
@@ -148,17 +148,13 @@ class MyScenario(Scenario):
 
     # Implement the single abstract extension point. Matrix-shaped scenarios delegate
     # to build_matrix_atomic_attacks; pass display_group_fn to customize result grouping
-    # (default groups by technique; here we group by dataset instead). The helper also
-    # reports which selected techniques had no registered factory, so record that skip
-    # list -- the base Scenario persists it into ScenarioResult.metadata and the CLI summary.
+    # (default groups by technique; here we group by dataset instead).
     async def _build_atomic_attacks_async(self, *, context):
-        attacks, skipped = build_matrix_atomic_attacks(
+        return build_matrix_atomic_attacks(
             context=context,
             objective_scorer=self._objective_scorer,
             display_group_fn=lambda combo: combo.dataset_name,
         )
-        self._skipped_techniques = skipped
-        return attacks
 
 
 # %% [markdown]

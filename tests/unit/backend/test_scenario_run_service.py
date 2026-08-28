@@ -19,7 +19,6 @@ from pyrit.backend.services.scenario_run_service import (
 from pyrit.converter import Converter
 from pyrit.models import AttackOutcome, ScenarioResult, ScenarioRunState
 from pyrit.models.catalog.scenario import RunScenarioRequest
-from pyrit.models.identifiers.scenario_identifier import ScenarioIdentifier
 from pyrit.scenario.core import DatasetAttackConfiguration, DatasetConfiguration
 from pyrit.scenario.core.scenario_technique import ScenarioTechnique
 from unit.mocks import make_scenario_result
@@ -89,33 +88,23 @@ def _make_db_scenario_result(
     run_state: ScenarioRunState = ScenarioRunState.IN_PROGRESS,
     attack_results: dict | None = None,
 ) -> MagicMock:
-    """Create a real ``ScenarioResult`` as CentralMemory would return it.
-
-    A real object (not a spec'd mock) because the summary builder reads
-    ``scenario_identifier`` / ``metadata``, which a spec'd mock does not define.
-    """
-    sr = ScenarioResult.model_construct(
-        id=result_id,
-        scenario_identifier=ScenarioIdentifier(class_name=scenario_name, techniques=[]),
-        attack_results=attack_results or {},
-        scenario_run_state=run_state,
-        number_tries=1,
-        creation_time=datetime(2025, 1, 1, tzinfo=timezone.utc),
-        completion_time=datetime(2025, 1, 1, 0, 5, tzinfo=timezone.utc),
-        labels={},
-        display_group_map={},
-        error_message=None,
-        error_type=None,
-        metadata={"skipped_techniques": []},
-    )
-
-    # Individual tests configure these; real methods would need live data.
-    from unittest.mock import MagicMock as MockFactory
-
-    object.__setattr__(sr, "get_techniques_used", MockFactory(return_value=[]))
-    object.__setattr__(sr, "objective_achieved_rate", MockFactory(return_value=0))
-    object.__setattr__(sr, "get_display_groups", MockFactory(return_value={}))
-
+    """Create a mock ScenarioResult as returned by CentralMemory."""
+    sr = MagicMock(spec=ScenarioResult)
+    sr.id = result_id
+    sr.scenario_name = scenario_name
+    sr.scenario_version = 1
+    sr.scenario_run_state = run_state
+    sr.get_techniques_used.return_value = []
+    sr.attack_results = attack_results or {}
+    sr.number_tries = 1
+    sr.creation_time = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    sr.completion_time = datetime(2025, 1, 1, 0, 5, tzinfo=timezone.utc)
+    sr.labels = {}
+    sr.objective_achieved_rate.return_value = 0
+    sr.get_display_groups.return_value = {}
+    sr.display_group_map = {}
+    sr.error_message = None
+    sr.error_type = None
     return sr
 
 

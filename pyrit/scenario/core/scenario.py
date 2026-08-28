@@ -695,9 +695,6 @@ class Scenario(ABC):
             dict[str, Any]: Metadata payload for the new ScenarioResult.
         """
         metadata: dict[str, Any] = {}
-        # Authoritative record of selected techniques that had no registered factory,
-        # captured during attack construction (see resolve_technique_factories).
-        metadata["skipped_techniques"] = sorted(set(getattr(self, "_skipped_techniques", []) or []))
         if getattr(self._dataset_config, "max_dataset_size", None) is None:
             return metadata
         hashes: list[str] = []

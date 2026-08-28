@@ -44,8 +44,7 @@ the constructor — no classmethod indirection required.
 
 4. **Implement `_build_atomic_attacks_async(self, *, context)`** — this is the single
    abstract extension point every scenario must define (see "AtomicAttack Construction" below).
-   Matrix-shaped scenarios delegate to `build_matrix_atomic_attacks(context=...)`, which returns
-   the attacks plus the names of selected techniques that had no registered factory.
+   Matrix-shaped scenarios delegate to `build_matrix_atomic_attacks(context=...)` in one line.
 
 ## Constructor Pattern
 
@@ -192,7 +191,7 @@ via `build_matrix_atomic_attacks`/`MatrixAtomicAttackBuilder`, pass a `display_g
 callback that maps each `MatrixCombo` to a group string:
 
 ```python
-attacks, skipped = build_matrix_atomic_attacks(
+build_matrix_atomic_attacks(
     context=context,
     objective_scorer=self._objective_scorer,
     display_group_fn=lambda combo: combo.technique_name,  # default: group by technique
@@ -222,28 +221,23 @@ half-initialized `self._*` state to build attacks — read everything from `cont
 ### Zero-boilerplate matrix scenarios
 
 Scenarios whose construction is the plain technique × dataset cross-product delegate to the
-`build_matrix_atomic_attacks` helper (see `Cyber`, `RapidResponse`). It returns the attacks
-**and** the names of selected techniques that had no registered factory; record that second
-value on `self._skipped_techniques` so the run reports the drop instead of hiding it:
+`build_matrix_atomic_attacks` helper in one line (see `Cyber`, `RapidResponse`):
 
 ```python
 from pyrit.scenario.core.matrix_atomic_attack_builder import build_matrix_atomic_attacks
 
 async def _build_atomic_attacks_async(self, *, context: ScenarioContext) -> list[AtomicAttack]:
-    attacks, skipped = build_matrix_atomic_attacks(
+    return build_matrix_atomic_attacks(
         context=context,
         objective_scorer=self._objective_scorer,
         technique_converters=self._technique_converters,  # optional CLI converter stacks
     )
-    self._skipped_techniques = skipped
-    return attacks
 ```
 
 `build_matrix_atomic_attacks`:
 1. Calls `resolve_technique_factories(context=context)` to map the selected techniques to their
    registered `AttackTechniqueFactory` instances (reads the `AttackTechniqueRegistry` singleton;
-   techniques with no registered factory are dropped, warned about, and returned as the second
-   value, so a partial miss is visible in the run summary rather than silent).
+   raises ``TechniqueResolutionError`` if any selected technique has no registered factory).
 2. Iterates every (technique × dataset) pair from `context.seed_groups_by_dataset`.
 3. Calls `factory.create()` with the objective target, conditional scorer override, and any
    per-technique converters (from `--techniques <technique>:converter.<name>`) as

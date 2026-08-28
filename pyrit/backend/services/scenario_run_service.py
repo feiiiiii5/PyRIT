@@ -599,12 +599,6 @@ class ScenarioRunService:
         completed_attacks = total_attacks
         techniques_used = scenario_result.get_techniques_used()
 
-        # Authoritative skip record persisted at resolution time by the scenario
-        # (see resolve_technique_factories). Display groups are presentation data —
-        # they group by dataset/target/template depending on the scenario, so they
-        # cannot be used to derive which factories resolved.
-        skipped_techniques = sorted(set(scenario_result.metadata.get("skipped_techniques", []) or []))
-
         # Surface per-attack errors and retry pressure regardless of overall run status:
         # a COMPLETED scenario can still hide errored objectives or rate-limit retries.
         failed_attacks: list[AttackErrorSummary] = []
@@ -647,7 +641,6 @@ class ScenarioRunService:
             error=error,
             error_type=error_type,
             techniques_used=techniques_used,
-            skipped_techniques=skipped_techniques,
             total_attacks=total_attacks,
             completed_attacks=completed_attacks,
             objective_achieved_rate=scenario_result.objective_achieved_rate(),

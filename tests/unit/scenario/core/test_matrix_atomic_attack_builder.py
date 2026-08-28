@@ -15,7 +15,6 @@ cross-product for scenarios whose attacks form such a grid. These tests pin the 
 * optional baseline emission from the flattened seed groups.
 """
 
-import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -400,40 +399,14 @@ class TestResolveTechniqueFactories:
         }
         context = _context(techniques=[_technique("beta"), _technique("alpha")])
         with _patch_registry(factories):
-            resolved = resolve_technique_factories(context=context).resolved
-            resolved = resolve_technique_factories(context=context).resolved
+            resolved = resolve_technique_factories(context=context)
         assert list(resolved.keys()) == ["beta", "alpha"]
 
-    def test_drops_techniques_without_factory(self):
+    def test_raises_when_any_selected_technique_is_missing(self):
         factories = {"alpha": _mock_factory(name="alpha")}
         context = _context(techniques=[_technique("alpha"), _technique("missing")])
-        with _patch_registry(factories):
-            resolved = resolve_technique_factories(context=context).resolved
-            resolved = resolve_technique_factories(context=context).resolved
-        assert list(resolved.keys()) == ["alpha"]
-
-    def test_warns_when_dropping_techniques_without_factory(self, caplog):
-        factories = {"alpha": _mock_factory(name="alpha")}
-        context = _context(techniques=[_technique("alpha"), _technique("missing")])
-        with (
-            _patch_registry(factories),
-            caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.matrix_atomic_attack_builder"),
-        ):
+        with _patch_registry(factories), pytest.raises(TechniqueResolutionError, match="missing"):
             resolve_technique_factories(context=context)
-        assert any("missing" in record.message for record in caplog.records)
-
-    def test_no_warning_when_all_techniques_resolve(self, caplog):
-        factories = {
-            "alpha": _mock_factory(name="alpha"),
-            "beta": _mock_factory(name="beta"),
-        }
-        context = _context(techniques=[_technique("alpha"), _technique("beta")])
-        with (
-            _patch_registry(factories),
-            caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.matrix_atomic_attack_builder"),
-        ):
-            resolve_technique_factories(context=context)
-        assert not [record for record in caplog.records if record.levelno == logging.WARNING]
 
     def test_raises_when_all_selected_techniques_missing(self):
         """A nonempty selection resolving to nothing must fail loudly, not run baseline-only."""
@@ -445,20 +418,9 @@ class TestResolveTechniqueFactories:
     def test_empty_selection_resolves_without_error(self):
         context = _context(techniques=[])
         with _patch_registry({}):
-            assert resolve_technique_factories(context=context).resolved == {}
+            assert resolve_technique_factories(context=context) == {}
 
-    def test_partial_miss_still_warns_and_continues(self, caplog):
-        factories = {"alpha": _mock_factory(name="alpha")}
-        context = _context(techniques=[_technique("alpha"), _technique("missing")])
-        with (
-            _patch_registry(factories),
-            caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.matrix_atomic_attack_builder"),
-        ):
-            resolved = resolve_technique_factories(context=context).resolved
-            resolved = resolve_technique_factories(context=context).resolved
-        assert list(resolved.keys()) == ["alpha"]
-
-    def test_warning_lists_each_missing_technique_once_in_selection_order(self, caplog):
+    def test_error_lists_each_missing_technique_once_in_selection_order(self):
         factories = {"alpha": _mock_factory(name="alpha")}
         context = _context(
             techniques=[
@@ -468,15 +430,11 @@ class TestResolveTechniqueFactories:
                 _technique("missing_a"),
             ]
         )
-        with (
-            _patch_registry(factories),
-            caplog.at_level(logging.WARNING, logger="pyrit.scenario.core.matrix_atomic_attack_builder"),
-        ):
+        with _patch_registry(factories), pytest.raises(TechniqueResolutionError) as exc_info:
             resolve_technique_factories(context=context)
-        messages = [record.message for record in caplog.records if record.levelno == logging.WARNING]
-        assert len(messages) == 1
-        assert messages[0].index("missing_a") < messages[0].index("missing_b")
-        assert messages[0].count("missing_a") == 1  # duplicates are deduplicated
+        message = str(exc_info.value)
+        assert message.index("missing_a") < message.index("missing_b")
+        assert message.count("missing_a") == 1
 
     def test_extra_factories_merged_and_override_registry(self):
         registry_factories = {"alpha": _mock_factory(name="alpha")}
@@ -484,13 +442,11 @@ class TestResolveTechniqueFactories:
         local_only = _mock_factory(name="local")
         context = _context(techniques=[_technique("alpha"), _technique("local")])
         with _patch_registry(registry_factories):
-            resolution = resolve_technique_factories(
+            resolved = resolve_technique_factories(
                 context=context,
                 extra_factories={"alpha": local_alpha, "local": local_only},
             )
-            resolved = resolution.resolved
         assert list(resolved.keys()) == ["alpha", "local"]
-        assert resolution.skipped == []
         assert resolved["alpha"] is local_alpha  # extra overrides the registry factory of the same name
         assert resolved["local"] is local_only  # local-only factory is selectable without global registration
 
@@ -502,49 +458,46 @@ class TestBuildMatrixAtomicAttacks:
     def test_builds_cross_product_grouped_by_technique(self):
         context = _context(
             techniques=[_technique("tech")],
-            seed_groups_by_dataset={"ds": [_seed_group(objective="q")]},
+            seed_groups_by_dataset={"ds": [_seed_group(objective="o1")]},
         )
         with _patch_registry({"tech": _mock_factory(name="tech")}):
-            attacks, skipped = build_matrix_atomic_attacks(
-                context=context, objective_scorer=MagicMock(spec=TrueFalseScorer)
-            )
-        assert [a.atomic_attack_name for a in attacks] == ["tech_ds"]
-        assert attacks[0].display_group == "tech"
-        assert skipped == []
+            result = build_matrix_atomic_attacks(context=context, objective_scorer=MagicMock(spec=TrueFalseScorer))
+        assert [a.atomic_attack_name for a in result] == ["tech_ds"]
+        assert result[0].display_group == "tech"
 
     def test_custom_display_group_fn(self):
         context = _context(
             techniques=[_technique("tech")],
-            seed_groups_by_dataset={"ds": [_seed_group(objective="q")]},
+            seed_groups_by_dataset={"ds": [_seed_group(objective="o1")]},
         )
         with _patch_registry({"tech": _mock_factory(name="tech")}):
-            attacks, _ = build_matrix_atomic_attacks(
+            result = build_matrix_atomic_attacks(
                 context=context,
                 objective_scorer=MagicMock(spec=TrueFalseScorer),
                 display_group_fn=lambda combo: combo.dataset_name,
             )
-        assert attacks[0].display_group == "ds"
+        assert result[0].display_group == "ds"
 
     def test_no_baseline_emitted_when_context_disables_it(self):
         context = _context(
             techniques=[_technique("tech")],
-            seed_groups_by_dataset={"ds": [_seed_group(objective="q")]},
+            seed_groups_by_dataset={"ds": [_seed_group(objective="o1")]},
             include_baseline=False,
         )
         with _patch_registry({"tech": _mock_factory(name="tech")}):
-            attacks, _ = build_matrix_atomic_attacks(context=context, objective_scorer=MagicMock(spec=TrueFalseScorer))
-        assert all(a.atomic_attack_name != "baseline" for a in attacks)
+            result = build_matrix_atomic_attacks(context=context, objective_scorer=MagicMock(spec=TrueFalseScorer))
+        assert all(a.atomic_attack_name != "baseline" for a in result)
 
     def test_baseline_emitted_when_context_enables_it(self):
         context = _context(
             techniques=[_technique("tech")],
-            seed_groups_by_dataset={"ds": [_seed_group(objective="q")]},
+            seed_groups_by_dataset={"ds": [_seed_group(objective="o1")]},
             include_baseline=True,
         )
         with _patch_registry({"tech": _mock_factory(name="tech")}):
-            attacks, _ = build_matrix_atomic_attacks(context=context, objective_scorer=MagicMock(spec=TrueFalseScorer))
-        assert attacks[0].atomic_attack_name == "baseline"
-        assert [a.atomic_attack_name for a in attacks] == ["baseline", "tech_ds"]
+            result = build_matrix_atomic_attacks(context=context, objective_scorer=MagicMock(spec=TrueFalseScorer))
+        assert result[0].atomic_attack_name == "baseline"
+        assert [a.atomic_attack_name for a in result] == ["baseline", "tech_ds"]
 
     def test_technique_converters_forwarded(self):
         from pyrit.converter import Converter
@@ -556,7 +509,7 @@ class TestBuildMatrixAtomicAttacks:
         factory = _mock_factory(name="tech")
         converter = MagicMock(spec=Converter)
         with _patch_registry({"tech": factory}):
-            attacks, _ = build_matrix_atomic_attacks(
+            build_matrix_atomic_attacks(
                 context=context,
                 objective_scorer=MagicMock(spec=TrueFalseScorer),
                 technique_converters={"tech": [converter]},
@@ -566,17 +519,15 @@ class TestBuildMatrixAtomicAttacks:
         assert len(extra) == 1
 
     def test_extra_factories_used_for_selection(self):
-        local_alpha = _mock_factory(name="alpha")
-        local_only = _mock_factory(name="local")
         context = _context(
-            techniques=[_technique("alpha"), _technique("local")],
-            seed_groups_by_dataset={"ds": [_seed_group(objective="q")]},
+            techniques=[_technique("local")],
+            seed_groups_by_dataset={"ds": [_seed_group(objective="o1")]},
         )
-        with _patch_registry({}):
-            attacks, skipped = build_matrix_atomic_attacks(
+        # The selected technique exists only in extra_factories, not the registry.
+        with _patch_registry({"other": _mock_factory(name="other")}):
+            result = build_matrix_atomic_attacks(
                 context=context,
                 objective_scorer=MagicMock(spec=TrueFalseScorer),
-                extra_factories={"alpha": local_alpha, "local": local_only},
+                extra_factories={"local": _mock_factory(name="local")},
             )
-        assert [a.atomic_attack_name for a in attacks] == ["alpha_ds", "local_ds"]
-        assert skipped == []
+        assert [a.atomic_attack_name for a in result] == ["local_ds"]
