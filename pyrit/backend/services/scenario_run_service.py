@@ -603,9 +603,7 @@ class ScenarioRunService:
         # (see resolve_technique_factories). Display groups are presentation data —
         # they group by dataset/target/template depending on the scenario, so they
         # cannot be used to derive which factories resolved.
-        skipped_techniques = sorted(
-            set(scenario_result.metadata.get("skipped_techniques", []) or [])
-        )
+        skipped_techniques = sorted(set(scenario_result.metadata.get("skipped_techniques", []) or []))
 
         # Surface per-attack errors and retry pressure regardless of overall run status:
         # a COMPLETED scenario can still hide errored objectives or rate-limit retries.

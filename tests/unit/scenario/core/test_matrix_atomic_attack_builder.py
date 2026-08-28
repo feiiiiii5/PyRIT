@@ -496,7 +496,6 @@ class TestResolveTechniqueFactories:
 
 
 @pytest.mark.usefixtures("patch_central_database")
-@pytest.mark.usefixtures("patch_central_database")
 class TestBuildMatrixAtomicAttacks:
     """``build_matrix_atomic_attacks`` wires the context into the builder in one call."""
 
@@ -533,9 +532,7 @@ class TestBuildMatrixAtomicAttacks:
             include_baseline=False,
         )
         with _patch_registry({"tech": _mock_factory(name="tech")}):
-            attacks, _ = build_matrix_atomic_attacks(
-                context=context, objective_scorer=MagicMock(spec=TrueFalseScorer)
-            )
+            attacks, _ = build_matrix_atomic_attacks(context=context, objective_scorer=MagicMock(spec=TrueFalseScorer))
         assert all(a.atomic_attack_name != "baseline" for a in attacks)
 
     def test_baseline_emitted_when_context_enables_it(self):
@@ -545,9 +542,7 @@ class TestBuildMatrixAtomicAttacks:
             include_baseline=True,
         )
         with _patch_registry({"tech": _mock_factory(name="tech")}):
-            attacks, _ = build_matrix_atomic_attacks(
-                context=context, objective_scorer=MagicMock(spec=TrueFalseScorer)
-            )
+            attacks, _ = build_matrix_atomic_attacks(context=context, objective_scorer=MagicMock(spec=TrueFalseScorer))
         assert attacks[0].atomic_attack_name == "baseline"
         assert [a.atomic_attack_name for a in attacks] == ["baseline", "tech_ds"]
 

@@ -231,7 +231,7 @@ def build_matrix_atomic_attacks(
     display_group_fn: Callable[[MatrixCombo], str] | None = None,
     technique_converters: dict[str, list[Converter]] | None = None,
     extra_factories: dict[str, AttackTechniqueFactory] | None = None,
-) -> list[AtomicAttack]:
+) -> tuple[list[AtomicAttack], list[str]]:
     """
     Build a matrix-shaped scenario's atomic attacks from its resolved context in one call.
 
