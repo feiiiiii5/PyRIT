@@ -52,6 +52,10 @@ export default function Initializers() {
         setRegisteredInitializers(registeredResult.value.items)
         setCatalogStatus('loaded')
       } else {
+        // Drop the previous catalog: entries left behind would keep rendering stale
+        // descriptions and env vars after the user was told the refresh failed.
+        setRegisteredInitializers([])
+        setCatalogStatus('error')
         const catalogError = toApiError(registeredResult.reason).detail
         setStatusMessage((current: StatusMessage | null) =>
           current
