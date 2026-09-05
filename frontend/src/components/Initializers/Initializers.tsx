@@ -84,7 +84,8 @@ export default function Initializers() {
         <div className={styles.headerActions}>
           <AvailableInitializersDialog
             registeredInitializers={registeredInitializers}
-            disabled={loading}
+            catalogStatus={catalogStatus}
+            disabled={loading || catalogStatus !== 'loaded'}
           />
           <Button
             appearance="subtle"
