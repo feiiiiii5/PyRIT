@@ -9,6 +9,7 @@ import type { InitializerSettingsResponse, RegisteredInitializer } from '@/types
 
 import AvailableInitializersDialog from './AvailableInitializersDialog'
 import ConfiguredInitializers from './ConfiguredInitializers'
+import type { CatalogStatus } from './initializerLookup'
 import { useInitializersStyles } from './Initializers.styles'
 
 interface StatusMessage {
@@ -24,6 +25,7 @@ export default function Initializers() {
   const styles = useInitializersStyles()
   const [settings, setSettings] = useState<InitializerSettingsResponse>(EMPTY_SETTINGS)
   const [registeredInitializers, setRegisteredInitializers] = useState<RegisteredInitializer[]>([])
+  const [catalogStatus, setCatalogStatus] = useState<CatalogStatus>('loading')
   const [loading, setLoading] = useState(true)
   const [statusMessage, setStatusMessage] = useState<StatusMessage | null>(null)
   const [refetchCount, setRefetchCount] = useState(0)
@@ -48,6 +50,7 @@ export default function Initializers() {
 
       if (registeredResult.status === 'fulfilled') {
         setRegisteredInitializers(registeredResult.value.items)
+        setCatalogStatus('loaded')
       } else {
         const catalogError = toApiError(registeredResult.reason).detail
         setStatusMessage((current: StatusMessage | null) =>
@@ -109,6 +112,7 @@ export default function Initializers() {
         <ConfiguredInitializers
           items={settings.configured}
           registeredInitializers={registeredInitializers}
+          catalogStatus={catalogStatus}
         />
       )}
     </section>
