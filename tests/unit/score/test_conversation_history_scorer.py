@@ -883,3 +883,62 @@ async def test_conversation_scorer_blocked_trigger_preserves_prior_turn_scoring(
     assert synthetic_piece.original_value_data_type == "text"
     assert synthetic_piece.response_error == "none"
     assert harmful_text in synthetic_piece.converted_value
+
+
+async def test_conversation_scorer_excludes_tool_output_from_scored_text(patch_central_database):
+    """Raw tool output must not reach the scored conversation text.
+
+    The scored conversation is documented to contain user and assistant turns only;
+    tool output is target-controlled data, not a judged turn of the dialogue.
+    """
+    memory = CentralMemory.get_memory_instance()
+    conversation_id = str(uuid.uuid4())
+
+    message_pieces = [
+        MessagePiece(
+            role="user",
+            original_value="User message",
+            conversation_id=conversation_id,
+            sequence=1,
+        ),
+        MessagePiece(
+            role="tool",
+            original_value="Tool output",
+            conversation_id=conversation_id,
+            sequence=2,
+        ),
+        MessagePiece(
+            role="assistant",
+            original_value="Assistant message",
+            conversation_id=conversation_id,
+            sequence=3,
+        ),
+    ]
+
+    memory.add_message_pieces_to_memory(message_pieces=message_pieces)
+
+    message = MagicMock()
+    message.message_pieces = [message_pieces[0]]
+
+    mock_scorer = MagicMock(spec=SelfAskGeneralFloatScaleScorer)
+    mock_scorer._validator = ScorerPromptValidator(supported_data_types=["text"])
+    score = Score(
+        score_value="0.4",
+        score_value_description="Test",
+        score_rationale="Test rationale",
+        score_metadata={},
+        score_category=["test"],
+        scorer_class_identifier=_make_scorer_id(),
+        message_piece_id=message_pieces[0].id or str(uuid.uuid4()),
+        objective="test",
+        score_type="float_scale",
+    )
+    mock_scorer._score_nested_async = AsyncMock(return_value=[score])
+    mock_scorer.validate_return_scores = MagicMock()
+
+    scorer = create_conversation_scorer(scorer=mock_scorer)
+    await scorer.score_async(scorable=MessageScorable.from_message(message))
+
+    called_scorable = mock_scorer._score_nested_async.call_args.kwargs["scorable"]
+    assert called_scorable.value == "User: User message\nAssistant: Assistant message\n"
+    assert "Tool output" not in called_scorable.value
