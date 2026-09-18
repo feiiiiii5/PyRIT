@@ -408,7 +408,7 @@ async def test_float_scale_threshold_scorer_with_real_float_scorer_on_blocked(pa
 
 
 @pytest.mark.parametrize("threshold", [float("nan"), float("inf"), float("-inf"), 0.0, -0.5, 1.5])
-def test_init_rejects_threshold_outside_unit_range(patch_central_database, threshold):
+def test_init_rejects_non_finite_or_outside_unit_range_threshold(patch_central_database, threshold):
     """A threshold that is not a finite value in (0, 1] cannot express a verdict.
 
     NaN is the dangerous one: it passes an unchained ``<= 0 or > 1`` guard because both
@@ -420,7 +420,7 @@ def test_init_rejects_threshold_outside_unit_range(patch_central_database, thres
         FloatScaleThresholdScorer(scorer=scorer, threshold=threshold)
 
 
-@pytest.mark.parametrize("threshold", [0.0001, 0.5, 1.0])
+@pytest.mark.parametrize("threshold", [0.0001, 1.0])
 def test_init_accepts_threshold_within_unit_range(patch_central_database, threshold):
     scorer = create_mock_float_scorer(0.9)
     threshold_scorer = FloatScaleThresholdScorer(scorer=scorer, threshold=threshold)

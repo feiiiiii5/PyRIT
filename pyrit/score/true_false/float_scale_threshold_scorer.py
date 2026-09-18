@@ -58,7 +58,7 @@ class FloatScaleThresholdScorer(TrueFalseScorer):
 
         Args:
             scorer (FloatScaleScorer): The underlying float scale scorer to use.
-            threshold (float): The threshold value between 0 and 1. Scores >= threshold are True, otherwise False.
+            threshold (float): A finite threshold in (0, 1]. Scores >= threshold are True, otherwise False.
             float_scale_aggregator (FloatScaleAggregatorFunc): The aggregator function to use for combining
                 multiple float scale scores. Defaults to FloatScaleScoreAggregator.MAX.
 
