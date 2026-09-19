@@ -36,6 +36,7 @@ import type {
   ScenarioRunSummary,
   ScenarioRunListResponse,
   ScenarioRunProgress,
+  ScenarioQueueSnapshot,
   ScenarioRunState,
   ConfigurationFileContent,
   EnvironmentFileContent,
@@ -493,6 +494,11 @@ export const scenariosApi = {
       `/scenarios/runs/${encodeURIComponent(scenarioResultId)}/progress`,
       { params, signal },
     )
+    return response.data
+  },
+
+  getQueue: async (signal?: AbortSignal): Promise<ScenarioQueueSnapshot> => {
+    const response = await apiClient.get('/scenarios/runs/queue', { signal })
     return response.data
   },
 
