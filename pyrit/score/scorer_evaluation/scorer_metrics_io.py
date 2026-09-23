@@ -8,6 +8,7 @@ Thread-safe operations for appending entries.
 
 import json
 import logging
+import os
 import threading
 from dataclasses import asdict
 from pathlib import Path
@@ -330,6 +331,71 @@ def _append_jsonl_entry(file_path: Path, lock: threading.Lock, entry: dict[str, 
             raise
 
 
+def _read_registry_lines(file_path: Path) -> list[tuple[str, dict[str, Any] | None]]:
+    """
+    Load a registry as (raw line, parsed entry) pairs, keeping unparseable lines.
+
+    Unlike ``_load_jsonl``, which is a lookup helper that may ignore what it cannot
+    read, this is the source of truth for a rewrite: every line in the file has to be
+    accounted for, so a line that is not valid JSON is returned with ``None`` and the
+    caller decides what to do with it. Read errors propagate instead of yielding a
+    short list, because a rewrite built from a partial read would delete the rest of
+    the registry.
+
+    Args:
+        file_path (Path): Path to the JSONL file.
+
+    Returns:
+        list[tuple[str, dict[str, Any] | None]]: One pair per non-blank line, with the
+            parsed entry (or ``None`` when the line is not a JSON object). Empty when
+            the file does not exist.
+
+    Raises:
+        OSError: If the file exists but cannot be read.
+        UnicodeDecodeError: If the file is not valid UTF-8.
+    """
+    if not file_path.exists():
+        logger.debug(f"Registry file not found: {file_path}")
+        return []
+
+    lines: list[tuple[str, dict[str, Any] | None]] = []
+    with open(file_path, encoding="utf-8") as f:
+        for line_num, line in enumerate(f, 1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Invalid JSON at line {line_num} in {file_path}: {e}")
+                lines.append((stripped, None))
+                continue
+            lines.append((stripped, parsed if isinstance(parsed, dict) else None))
+    return lines
+
+
+def _rewrite_jsonl_atomically(file_path: Path, lines: list[str]) -> None:
+    """
+    Replace a registry file's contents in one step that readers either see whole.
+
+    Args:
+        file_path (Path): Path to the JSONL file to rewrite.
+        lines (list[str]): Raw lines to write, one per registry entry.
+
+    Raises:
+        OSError: If the file cannot be written or moved into place.
+    """
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = file_path.with_name(f"{file_path.name}.tmp-{threading.get_ident()}")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            for line in lines:
+                f.write(line + "\n")
+        os.replace(temp_path, file_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 def replace_evaluation_results(
     *,
     file_path: Path,
@@ -344,11 +410,18 @@ def replace_evaluation_results(
     and adds the new entry. Only one entry per eval_hash is maintained in the registry,
     ensuring we always track the highest-fidelity evaluation.
 
+    Lines that could not be parsed are kept verbatim rather than dropped: a corrupt line
+    is not an entry this call is allowed to delete, and pre-computed metrics for other
+    scorers cost hours of model calls to regenerate.
+
     Args:
         file_path (Path): The full path to the JSONL file.
         scorer_identifier (ComponentIdentifier): The scorer's configuration identifier.
         eval_hash (str): The pre-computed evaluation hash for grouping.
         metrics (ScorerMetrics): The computed metrics (ObjectiveScorerMetrics or HarmScorerMetrics).
+
+    Raises:
+        OSError: If the registry exists but cannot be read, written, or moved into place.
     """
     # Get or create lock for this file path
     file_path_str = str(file_path)
@@ -361,29 +434,20 @@ def replace_evaluation_results(
     new_entry["metrics"] = _metrics_to_registry_dict(metrics)
 
     with _file_write_locks[file_path_str]:
-        try:
-            # Load existing entries
-            existing_entries = _load_jsonl(file_path)
+        # Load existing entries, keeping track of which lines could not be parsed
+        existing_lines = _read_registry_lines(file_path)
 
-            # Filter out entries with the same hash
-            filtered_entries = [e for e in existing_entries if e.get("eval_hash") != eval_hash]
+        # Keep every line that is not the entry being replaced, including unparseable ones
+        preserved = [raw for raw, parsed in existing_lines if parsed is None or parsed.get("eval_hash") != eval_hash]
 
-            # Add the new entry
-            filtered_entries.append(new_entry)
+        # Rewrite the file with the surviving lines plus the new entry
+        _rewrite_jsonl_atomically(file_path, [*preserved, json.dumps(new_entry)])
 
-            # Rewrite the file atomically
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(file_path, "w", encoding="utf-8") as f:
-                for entry in filtered_entries:
-                    f.write(json.dumps(entry) + "\n")
-
-            replaced = len(existing_entries) != len(filtered_entries)
-            action = "Replaced" if replaced else "Added"
-            logger.info(
-                f"{action} metrics for {scorer_identifier.class_name}"
-                f" (eval_hash={eval_hash[:8]}...) in {file_path.name}"
-            )
-
-        except Exception as e:
-            logger.error(f"Failed to replace entry in registry {file_path}: {e}")
-            raise
+        replaced = len(preserved) != len(existing_lines)
+        action = "Replaced" if replaced else "Added"
+        dropped = sum(1 for _, parsed in existing_lines if parsed is None)
+        if dropped:
+            action += f" (kept {dropped} unparseable line(s) verbatim)"
+        logger.info(
+            f"{action} metrics for {scorer_identifier.class_name} (eval_hash={eval_hash[:8]}...) in {file_path.name}"
+        )
