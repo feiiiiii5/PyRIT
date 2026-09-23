@@ -2,6 +2,8 @@
 # Licensed under the MIT license.
 
 import json
+import os
+import stat
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,6 +19,7 @@ from pyrit.score.scorer_evaluation.scorer_metrics_io import (
     _append_jsonl_entry,
     _load_jsonl,
     _metrics_to_registry_dict,
+    _rewrite_jsonl_atomically,
     add_evaluation_results,
     find_harm_metrics_by_eval_hash,
     find_objective_metrics_by_eval_hash,
@@ -507,3 +510,70 @@ def test_replace_evaluation_results_leaves_registry_intact_after_a_failed_read(t
         assert path.read_bytes() == undecodable, "a partial read must not be rewritten over the registry"
     finally:
         sio._file_write_locks = original_locks
+
+
+def test_replace_evaluation_results_preserves_raw_lines_and_endings(tmp_path):
+    import pyrit.score.scorer_evaluation.scorer_metrics_io as sio
+
+    original_locks = sio._file_write_locks.copy()
+    try:
+        path = tmp_path / "test_metrics.jsonl"
+        original = (
+            b'  {"eval_hash": "keep", "metrics": {"value": 1}}\r\n'
+            b"\tnot json  \n"
+            b'  {"eval_hash": "other", "metrics": {"value": 2}}'
+        )
+        path.write_bytes(original)
+
+        replace_evaluation_results(
+            file_path=path,
+            scorer_identifier=_make_identifier(),
+            eval_hash="new_hash",
+            metrics=_make_objective_metrics(accuracy=0.99),
+        )
+
+        rewritten = path.read_bytes()
+        assert rewritten.startswith(original)
+        assert rewritten.endswith(b"\n")
+        assert [entry["eval_hash"] for entry in _load_jsonl(path)] == ["keep", "other", "new_hash"]
+    finally:
+        sio._file_write_locks = original_locks
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission semantics")
+def test_replace_evaluation_results_preserves_existing_permissions(tmp_path):
+    import pyrit.score.scorer_evaluation.scorer_metrics_io as sio
+
+    original_locks = sio._file_write_locks.copy()
+    try:
+        path = tmp_path / "test_metrics.jsonl"
+        path.write_text('{"eval_hash": "keep", "metrics": {}}\n', encoding="utf-8")
+        path.chmod(0o664)
+
+        replace_evaluation_results(
+            file_path=path,
+            scorer_identifier=_make_identifier(),
+            eval_hash="new_hash",
+            metrics=_make_objective_metrics(accuracy=0.99),
+        )
+
+        assert stat.S_IMODE(path.stat().st_mode) == 0o664
+    finally:
+        sio._file_write_locks = original_locks
+
+
+def test_rewrite_jsonl_atomically_uses_distinct_staging_files(tmp_path):
+    path = tmp_path / "test_metrics.jsonl"
+    names: list[str] = []
+    real_replace = os.replace
+
+    def record_replace(source, destination):
+        names.append(Path(source).name)
+        real_replace(source, destination)
+
+    with patch("pyrit.score.scorer_evaluation.scorer_metrics_io.os.replace", side_effect=record_replace):
+        _rewrite_jsonl_atomically(path, [json.dumps({"value": 1}) + "\n"])
+        _rewrite_jsonl_atomically(path, [json.dumps({"value": 2}) + "\n"])
+
+    assert len(names) == 2
+    assert len(set(names)) == 2

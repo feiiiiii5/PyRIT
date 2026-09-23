@@ -9,6 +9,8 @@ Thread-safe operations for appending entries.
 import json
 import logging
 import os
+import stat
+import tempfile
 import threading
 from dataclasses import asdict
 from pathlib import Path
@@ -346,9 +348,10 @@ def _read_registry_lines(file_path: Path) -> list[tuple[str, dict[str, Any] | No
         file_path (Path): Path to the JSONL file.
 
     Returns:
-        list[tuple[str, dict[str, Any] | None]]: One pair per non-blank line, with the
-            parsed entry (or ``None`` when the line is not a JSON object). Empty when
-            the file does not exist.
+        list[tuple[str, dict[str, Any] | None]]: One pair per line, with the raw line
+            (including its original whitespace and line ending) and the parsed entry
+            (or ``None`` when the line is not a JSON object). Empty when the file
+            does not exist.
 
     Raises:
         OSError: If the file exists but cannot be read.
@@ -359,18 +362,19 @@ def _read_registry_lines(file_path: Path) -> list[tuple[str, dict[str, Any] | No
         return []
 
     lines: list[tuple[str, dict[str, Any] | None]] = []
-    with open(file_path, encoding="utf-8") as f:
-        for line_num, line in enumerate(f, 1):
-            stripped = line.strip()
+    with open(file_path, encoding="utf-8", newline="") as f:
+        for line_num, raw_line in enumerate(f, 1):
+            stripped = raw_line.strip()
             if not stripped:
+                lines.append((raw_line, None))
                 continue
             try:
                 parsed = json.loads(stripped)
             except json.JSONDecodeError as e:
                 logger.warning(f"Invalid JSON at line {line_num} in {file_path}: {e}")
-                lines.append((stripped, None))
+                lines.append((raw_line, None))
                 continue
-            lines.append((stripped, parsed if isinstance(parsed, dict) else None))
+            lines.append((raw_line, parsed if isinstance(parsed, dict) else None))
     return lines
 
 
@@ -380,20 +384,37 @@ def _rewrite_jsonl_atomically(file_path: Path, lines: list[str]) -> None:
 
     Args:
         file_path (Path): Path to the JSONL file to rewrite.
-        lines (list[str]): Raw lines to write, one per registry entry.
+        lines (list[str]): Raw lines to write, including their original line endings.
 
     Raises:
         OSError: If the file cannot be written or moved into place.
     """
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = file_path.with_name(f"{file_path.name}.tmp-{threading.get_ident()}")
+    existing_mode = stat.S_IMODE(file_path.stat().st_mode) if file_path.exists() else None
+
+    # NamedTemporaryFile uses O_EXCL, so concurrent writers cannot share a staging path.
+    temp_path: Path | None = None
     try:
-        with open(temp_path, "w", encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=file_path.parent,
+            delete=False,
+        ) as temp_file:
+            temp_path = Path(temp_file.name)
             for line in lines:
-                f.write(line + "\n")
+                temp_file.write(line)
+
+        assert temp_path is not None
+        if existing_mode is not None:
+            os.chmod(temp_path, existing_mode)
+        # The staging file is closed before replace for platforms that cannot replace
+        # an open file.
         os.replace(temp_path, file_path)
     finally:
-        temp_path.unlink(missing_ok=True)
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 def replace_evaluation_results(
@@ -440,8 +461,19 @@ def replace_evaluation_results(
         # Keep every line that is not the entry being replaced, including unparseable ones
         preserved = [raw for raw, parsed in existing_lines if parsed is None or parsed.get("eval_hash") != eval_hash]
 
+        # Keep the registry's existing line-ending style and only add a separator when
+        # the final preserved line did not have one.
+        line_ending = next(
+            (ending for raw in reversed(preserved) for ending in ("\r\n", "\n", "\r") if raw.endswith(ending)),
+            "\n",
+        )
+        output_lines = [*preserved]
+        if output_lines and not output_lines[-1].endswith(("\n", "\r")):
+            output_lines[-1] += line_ending
+        output_lines.append(json.dumps(new_entry) + line_ending)
+
         # Rewrite the file with the surviving lines plus the new entry
-        _rewrite_jsonl_atomically(file_path, [*preserved, json.dumps(new_entry)])
+        _rewrite_jsonl_atomically(file_path, output_lines)
 
         replaced = len(preserved) != len(existing_lines)
         action = "Replaced" if replaced else "Added"
