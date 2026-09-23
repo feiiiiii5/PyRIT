@@ -443,3 +443,67 @@ def test_replace_evaluation_results_preserves_other_entries(tmp_path):
         assert replaced["metrics"]["accuracy"] == 0.99
     finally:
         sio._file_write_locks = original_locks
+
+
+def test_replace_evaluation_results_keeps_unparseable_lines(tmp_path):
+    import pyrit.score.scorer_evaluation.scorer_metrics_io as sio
+
+    original_locks = sio._file_write_locks.copy()
+    try:
+        path = tmp_path / "test_metrics.jsonl"
+        add_evaluation_results(
+            file_path=path,
+            scorer_identifier=_make_identifier(class_name="A"),
+            eval_hash="keep_me",
+            metrics=_make_objective_metrics(accuracy=0.70),
+        )
+        torn = '{"hash_b": "b", "metrics": {"acc'
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(torn + "\n")
+
+        replace_evaluation_results(
+            file_path=path,
+            scorer_identifier=_make_identifier(class_name="B_new"),
+            eval_hash="new_hash",
+            metrics=_make_objective_metrics(accuracy=0.99),
+        )
+
+        assert torn in path.read_text(encoding="utf-8"), "the rewrite deleted a line it could not read"
+        hashes = {entry["eval_hash"] for entry in _load_jsonl(path)}
+        assert hashes == {"keep_me", "new_hash"}
+    finally:
+        sio._file_write_locks = original_locks
+
+
+def test_replace_evaluation_results_leaves_registry_intact_after_a_failed_read(tmp_path):
+    import pyrit.score.scorer_evaluation.scorer_metrics_io as sio
+
+    original_locks = sio._file_write_locks.copy()
+    try:
+        path = tmp_path / "test_metrics.jsonl"
+        add_evaluation_results(
+            file_path=path,
+            scorer_identifier=_make_identifier(class_name="A"),
+            eval_hash="hash_a",
+            metrics=_make_objective_metrics(accuracy=0.70),
+        )
+        add_evaluation_results(
+            file_path=path,
+            scorer_identifier=_make_identifier(class_name="C"),
+            eval_hash="hash_c",
+            metrics=_make_objective_metrics(accuracy=0.80),
+        )
+        undecodable = path.read_bytes() + b'{"eval_hash": "bad", "metrics": \xff\xfe}\n'
+        path.write_bytes(undecodable)
+
+        with pytest.raises(UnicodeDecodeError):
+            replace_evaluation_results(
+                file_path=path,
+                scorer_identifier=_make_identifier(class_name="New"),
+                eval_hash="new_hash",
+                metrics=_make_objective_metrics(accuracy=0.99),
+            )
+
+        assert path.read_bytes() == undecodable, "a partial read must not be rewritten over the registry"
+    finally:
+        sio._file_write_locks = original_locks
