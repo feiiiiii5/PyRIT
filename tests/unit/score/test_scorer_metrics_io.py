@@ -562,6 +562,45 @@ def test_replace_evaluation_results_preserves_existing_permissions(tmp_path):
         sio._file_write_locks = original_locks
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX umask semantics")
+def test_new_registry_uses_umask_permissions(tmp_path):
+    path = tmp_path / "test_metrics.jsonl"
+    original_umask = os.umask(0o022)
+    try:
+        _rewrite_jsonl_atomically(path, [json.dumps({"value": 1}) + "\n"])
+        assert stat.S_IMODE(path.stat().st_mode) == 0o644
+    finally:
+        os.umask(original_umask)
+
+
+def test_cleanup_preserves_replace_error_and_removes_read_only_staging_file(tmp_path):
+    path = tmp_path / "test_metrics.jsonl"
+    original = b'{"value": 1}\n'
+    path.write_bytes(original)
+    real_unlink = Path.unlink
+    cleanup_attempts: list[str] = []
+
+    def fail_once_for_staging_file(self, missing_ok=False):
+        if self.name.startswith(f"{path.name}.tmp-") and not cleanup_attempts:
+            cleanup_attempts.append(self.name)
+            raise PermissionError("read-only staging file")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    with (
+        patch(
+            "pyrit.score.scorer_evaluation.scorer_metrics_io.os.replace",
+            side_effect=PermissionError("replace failed"),
+        ),
+        patch.object(Path, "unlink", new=fail_once_for_staging_file),
+    ):
+        with pytest.raises(PermissionError, match="replace failed"):
+            _rewrite_jsonl_atomically(path, [json.dumps({"value": 2}) + "\n"])
+
+    assert cleanup_attempts
+    assert path.read_bytes() == original
+    assert not list(tmp_path.glob(f"{path.name}.tmp-*"))
+
+
 def test_rewrite_jsonl_atomically_uses_distinct_staging_files(tmp_path):
     path = tmp_path / "test_metrics.jsonl"
     names: list[str] = []

@@ -9,8 +9,8 @@ Thread-safe operations for appending entries.
 import json
 import logging
 import os
+import secrets
 import stat
-import tempfile
 import threading
 from dataclasses import asdict
 from pathlib import Path
@@ -378,6 +378,42 @@ def _read_registry_lines(file_path: Path) -> list[tuple[str, dict[str, Any] | No
     return lines
 
 
+def _create_staging_file(file_path: Path) -> tuple[Path, int]:
+    """
+    Create an exclusive staging file whose mode is filtered by the process umask.
+
+    Returns:
+        tuple[Path, int]: The staging path and its open file descriptor.
+
+    Raises:
+        FileExistsError: If no unique staging name could be created.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    for _ in range(100):
+        temp_path = file_path.with_name(f"{file_path.name}.tmp-{secrets.token_hex(8)}")
+        try:
+            return temp_path, os.open(temp_path, flags, 0o666)
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"Could not create a unique staging file next to {file_path}")
+
+
+def _cleanup_staging_file(temp_path: Path) -> None:
+    """Remove a staging file without masking an earlier write/replace error."""
+    try:
+        temp_path.unlink(missing_ok=True)
+    except PermissionError:
+        try:
+            # Windows refuses to unlink a read-only file. Make only this disposable
+            # staging file writable; the registry's permissions remain untouched.
+            temp_path.chmod(stat.S_IREAD | stat.S_IWRITE)
+            temp_path.unlink(missing_ok=True)
+        except OSError as cleanup_error:
+            logger.warning("Failed to clean up staging file %s: %s", temp_path, cleanup_error)
+    except OSError as cleanup_error:
+        logger.warning("Failed to clean up staging file %s: %s", temp_path, cleanup_error)
+
+
 def _rewrite_jsonl_atomically(file_path: Path, lines: list[str]) -> None:
     """
     Replace a registry file's contents in one step that readers either see whole.
@@ -392,29 +428,24 @@ def _rewrite_jsonl_atomically(file_path: Path, lines: list[str]) -> None:
     file_path.parent.mkdir(parents=True, exist_ok=True)
     existing_mode = stat.S_IMODE(file_path.stat().st_mode) if file_path.exists() else None
 
-    # NamedTemporaryFile uses O_EXCL, so concurrent writers cannot share a staging path.
-    temp_path: Path | None = None
+    # O_EXCL prevents independent writers from sharing a staging path. Mode 0666
+    # deliberately lets the OS apply the current umask for a new registry.
+    temp_path, temp_fd = _create_staging_file(file_path)
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline="",
-            dir=file_path.parent,
-            delete=False,
-        ) as temp_file:
-            temp_path = Path(temp_file.name)
+        with os.fdopen(temp_fd, "w", encoding="utf-8", newline="") as temp_file:
+            temp_fd = -1
             for line in lines:
                 temp_file.write(line)
 
-        assert temp_path is not None
         if existing_mode is not None:
             os.chmod(temp_path, existing_mode)
         # The staging file is closed before replace for platforms that cannot replace
         # an open file.
         os.replace(temp_path, file_path)
     finally:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
+        if temp_fd >= 0:
+            os.close(temp_fd)
+        _cleanup_staging_file(temp_path)
 
 
 def replace_evaluation_results(
