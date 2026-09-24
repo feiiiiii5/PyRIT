@@ -562,6 +562,51 @@ def test_replace_evaluation_results_preserves_existing_permissions(tmp_path):
         sio._file_write_locks = original_locks
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission semantics")
+def test_existing_registry_permissions_are_applied_before_staging_write(tmp_path):
+    import pyrit.score.scorer_evaluation.scorer_metrics_io as sio
+
+    path = tmp_path / "test_metrics.jsonl"
+    path.write_text('{"value": 1}\n', encoding="utf-8")
+    path.chmod(0o600)
+
+    real_create_staging_file = sio._create_staging_file
+    real_fdopen = os.fdopen
+    staging_paths = []
+
+    def record_staging_file(file_path):
+        staging_path, fd = real_create_staging_file(file_path)
+        staging_paths.append(staging_path)
+        return staging_path, fd
+
+    class PermissionCheckingWriter:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+        def write(self, content):
+            assert stat.S_IMODE(staging_paths[0].stat().st_mode) == 0o600
+            return self.stream.write(content)
+
+    with (
+        patch.object(sio, "_create_staging_file", side_effect=record_staging_file),
+        patch.object(
+            os,
+            "fdopen",
+            side_effect=lambda *args, **kwargs: PermissionCheckingWriter(real_fdopen(*args, **kwargs)),
+        ),
+    ):
+        _rewrite_jsonl_atomically(path, ['{"value": 2}\n'])
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX umask semantics")
 def test_new_registry_uses_umask_permissions(tmp_path):
     path = tmp_path / "test_metrics.jsonl"

@@ -432,12 +432,18 @@ def _rewrite_jsonl_atomically(file_path: Path, lines: list[str]) -> None:
     # deliberately lets the OS apply the current umask for a new registry.
     temp_path, temp_fd = _create_staging_file(file_path)
     try:
+        if existing_mode is not None and hasattr(os, "fchmod"):
+            # Apply the registry's permissions before copying its contents so a
+            # private registry never has a more readable staging copy.
+            os.fchmod(temp_fd, existing_mode)
+
         with os.fdopen(temp_fd, "w", encoding="utf-8", newline="") as temp_file:
             temp_fd = -1
             for line in lines:
                 temp_file.write(line)
 
         if existing_mode is not None:
+            # Writing can clear special permission bits, so restore the final mode.
             os.chmod(temp_path, existing_mode)
         # The staging file is closed before replace for platforms that cannot replace
         # an open file.
