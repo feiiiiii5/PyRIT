@@ -134,6 +134,14 @@ jobs:
 
       - name: Publish Pytest Results
         uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3 # v2.24.0
-        if: runner.os == 'ubuntu-latest'
+        if: runner.os == 'Linux' && (success() || failure())
         with:
           files: '**/test-*.xml'
+
+      - name: Upload SDK JUnit XML
+        if: runner.os == 'Linux' && (success() || failure())
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pytest-results-${{ matrix.os }}-py${{ matrix.python }}-${{ matrix.package_extras }}
+          path: '**/test-*.xml'
+          if-no-files-found: warn
