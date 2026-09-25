@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from pyrit.backend.services.initializer_service import InitializerService, get_initializer_service
     from pyrit.backend.services.scenario_run_service import ScenarioRunService, get_scenario_run_service
     from pyrit.backend.services.scenario_service import ScenarioService, get_scenario_service
+    from pyrit.backend.services.scorer_service import ObjectiveScorerService, get_objective_scorer_service
     from pyrit.backend.services.target_service import TargetService, get_target_service
 
 _LAZY_EXPORTS: dict[str, str | tuple[str, str | None]] = {
@@ -34,6 +35,8 @@ _LAZY_EXPORTS: dict[str, str | tuple[str, str | None]] = {
     "get_scenario_service": "pyrit.backend.services.scenario_service",
     "ScenarioRunService": "pyrit.backend.services.scenario_run_service",
     "get_scenario_run_service": "pyrit.backend.services.scenario_run_service",
+    "ObjectiveScorerService": "pyrit.backend.services.scorer_service",
+    "get_objective_scorer_service": "pyrit.backend.services.scorer_service",
     "TargetService": "pyrit.backend.services.target_service",
     "get_target_service": "pyrit.backend.services.target_service",
 }

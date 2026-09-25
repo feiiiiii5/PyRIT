@@ -62,6 +62,7 @@ if TYPE_CHECKING:
         ListRegisteredInitializersResponse,
         RegisterInitializerRequest,
     )
+    from pyrit.backend.models.objective_scorers import ObjectiveScorerPreset, ObjectiveScorerPresetListResponse
     from pyrit.backend.models.scenarios import ListRegisteredScenariosResponse, ScenarioRunListResponse
     from pyrit.backend.models.targets import CreateTargetRequest, TargetListResponse
 
@@ -110,6 +111,8 @@ _LAZY_EXPORTS: dict[str, str | tuple[str, str | None]] = {
     "ScenarioRunListResponse": "pyrit.backend.models.scenarios",
     "ListRegisteredInitializersResponse": "pyrit.backend.models.initializers",
     "RegisterInitializerRequest": "pyrit.backend.models.initializers",
+    "ObjectiveScorerPreset": "pyrit.backend.models.objective_scorers",
+    "ObjectiveScorerPresetListResponse": "pyrit.backend.models.objective_scorers",
     "CreateTargetRequest": "pyrit.backend.models.targets",
     "TargetListResponse": "pyrit.backend.models.targets",
 }

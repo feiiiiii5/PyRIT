@@ -364,6 +364,16 @@ Use **Reload** to discard local edits and fetch the latest source content. Saved
 
 ## Registry API Migration Notes
 
+The read-only `GET /api/scorers/objective-presets` endpoint lists initialized,
+recognized objective-scorer presets for scenario selection. It reports each
+preset's scorer and result family, objective-result polarity, relevant tag keys,
+compatibility, and prerequisites. Raw refusal scorers remain incompatible because
+their `true` result means refusal. The response reports whether a compatible
+default is ready, missing, or incompatible; it never substitutes another preset
+for an incompatible configured default. An empty or unusable registry includes
+setup guidance. Listing presets does not build scorers or invoke targets, and the
+response omits scorer identifiers, tag values, and registry metadata.
+
 Use `/api/converters/types` and `/api/targets/types` for registry build metadata.
 These endpoints return all constructor parameters from the registry, including
 lists, unions, and component references. The temporary `/catalog` routes retain
