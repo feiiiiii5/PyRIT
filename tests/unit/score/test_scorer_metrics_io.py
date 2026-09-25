@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
+import errno
 import json
 import os
 import stat
@@ -544,6 +545,8 @@ def test_replace_evaluation_results_preserves_raw_lines_and_endings(tmp_path):
         path = tmp_path / "test_metrics.jsonl"
         original = (
             b'  {"eval_hash": "keep", "metrics": {"value": 1}}\r\n'
+            b"\t  \r\n"
+            b"\n"
             b"\tnot json  \n"
             b'  {"eval_hash": "other", "metrics": {"value": 2}}'
         )
@@ -710,3 +713,91 @@ def test_rewrite_jsonl_atomically_uses_distinct_staging_files(tmp_path):
 
     assert len(names) == 2
     assert len(set(names)) == 2
+
+
+def test_rewrite_jsonl_atomically_retries_staging_collisions(tmp_path: Path) -> None:
+    path = tmp_path / "test_metrics.jsonl"
+    path.write_bytes(b'{"value": 1}\n')
+    collision = tmp_path / "test_metrics.jsonl.tmp-occupied"
+    other_writer = b'{"value": "other writer"}\n'
+    collision.write_bytes(other_writer)
+
+    with patch(
+        "pyrit.score.scorer_evaluation.scorer_metrics_io.secrets.token_hex",
+        side_effect=["occupied", "available"],
+    ) as token_hex:
+        _rewrite_jsonl_atomically(path, ['{"value": 2}\n'])
+
+    assert token_hex.call_count == 2
+    assert path.read_bytes() == b'{"value": 2}\n'
+    assert collision.read_bytes() == other_writer
+    assert set(tmp_path.iterdir()) == {path, collision}
+
+
+def test_rewrite_jsonl_atomically_preserves_files_when_staging_collisions_exhaust_retries(tmp_path: Path) -> None:
+    path = tmp_path / "test_metrics.jsonl"
+    original = b'{"value": 1}\n'
+    path.write_bytes(original)
+    collision = tmp_path / "test_metrics.jsonl.tmp-occupied"
+    other_writer = b'{"value": "other writer"}\n'
+    collision.write_bytes(other_writer)
+
+    with patch(
+        "pyrit.score.scorer_evaluation.scorer_metrics_io.secrets.token_hex", return_value="occupied"
+    ) as token_hex:
+        with pytest.raises(FileExistsError, match="Could not create a unique staging file"):
+            _rewrite_jsonl_atomically(path, ['{"value": 2}\n'])
+
+    assert token_hex.call_count == 100
+    assert path.read_bytes() == original
+    assert collision.read_bytes() == other_writer
+    assert set(tmp_path.iterdir()) == {path, collision}
+
+
+def test_rewrite_jsonl_atomically_closes_descriptor_after_fdopen_failure(tmp_path: Path) -> None:
+    path = tmp_path / "test_metrics.jsonl"
+    original = b'{"value": 1}\n'
+    path.write_bytes(original)
+    with patch.object(os, "fdopen", side_effect=OSError("fdopen failed")) as fdopen:
+        with pytest.raises(OSError, match="fdopen failed"):
+            _rewrite_jsonl_atomically(path, ['{"value": 2}\n'])
+
+    with pytest.raises(OSError) as error:
+        os.fstat(fdopen.call_args.args[0])
+    assert error.value.errno == errno.EBADF
+    assert path.read_bytes() == original
+    assert not list(tmp_path.glob(f"{path.name}.tmp-*"))
+
+
+@pytest.mark.parametrize(
+    "unlink_errors",
+    [
+        pytest.param([OSError("cleanup failed")], id="unlink"),
+        pytest.param([PermissionError("read-only staging file"), OSError("cleanup failed")], id="read-only-retry"),
+    ],
+)
+def test_cleanup_failure_is_logged_without_masking_replace_error(
+    *, tmp_path: Path, caplog: pytest.LogCaptureFixture, unlink_errors: list[OSError]
+) -> None:
+    path = tmp_path / "test_metrics.jsonl"
+    original = b'{"value": 1}\n'
+    path.write_bytes(original)
+    original_mode = stat.S_IMODE(path.stat().st_mode)
+    replace_error = PermissionError("replace failed")
+
+    with (
+        patch.object(os, "replace", side_effect=replace_error),
+        patch.object(Path, "unlink", autospec=True, side_effect=unlink_errors) as unlink,
+    ):
+        with pytest.raises(PermissionError, match="replace failed") as error:
+            _rewrite_jsonl_atomically(path, ['{"value": 2}\n'])
+
+    assert error.value is replace_error
+    assert path.read_bytes() == original
+    assert stat.S_IMODE(path.stat().st_mode) == original_mode
+    staging_paths = list(tmp_path.glob(f"{path.name}.tmp-*"))
+    assert len(staging_paths) == 1
+    staging_path = staging_paths[0]
+    assert [call.args[0] for call in unlink.call_args_list] == [staging_path] * len(unlink_errors)
+    assert caplog.messages == [f"Failed to clean up staging file {staging_path}: cleanup failed"]
+    staging_path.unlink()
