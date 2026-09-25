@@ -378,9 +378,9 @@ def _read_registry_lines(file_path: Path) -> list[tuple[str, dict[str, Any] | No
     return lines
 
 
-def _create_staging_file(file_path: Path) -> tuple[Path, int]:
+def _create_staging_file(file_path: Path, mode: int = 0o666) -> tuple[Path, int]:
     """
-    Create an exclusive staging file whose mode is filtered by the process umask.
+    Create an exclusive staging file whose requested mode is filtered by the process umask.
 
     Returns:
         tuple[Path, int]: The staging path and its open file descriptor.
@@ -392,7 +392,7 @@ def _create_staging_file(file_path: Path) -> tuple[Path, int]:
     for _ in range(100):
         temp_path = file_path.with_name(f"{file_path.name}.tmp-{secrets.token_hex(8)}")
         try:
-            return temp_path, os.open(temp_path, flags, 0o666)
+            return temp_path, os.open(temp_path, flags, mode)
         except FileExistsError:
             continue
     raise FileExistsError(f"Could not create a unique staging file next to {file_path}")
@@ -428,9 +428,12 @@ def _rewrite_jsonl_atomically(file_path: Path, lines: list[str]) -> None:
     file_path.parent.mkdir(parents=True, exist_ok=True)
     existing_mode = stat.S_IMODE(file_path.stat().st_mode) if file_path.exists() else None
 
-    # O_EXCL prevents independent writers from sharing a staging path. Mode 0666
-    # deliberately lets the OS apply the current umask for a new registry.
-    temp_path, temp_fd = _create_staging_file(file_path)
+    # O_EXCL prevents independent writers from sharing a staging path. Create
+    # staging files for existing registries privately from the start; changing
+    # permissions after creation cannot protect readers that already opened it.
+    # New registries use 0666 so the OS applies the current umask as before.
+    creation_mode = 0o600 if existing_mode is not None else 0o666
+    temp_path, temp_fd = _create_staging_file(file_path, mode=creation_mode)
     try:
         if existing_mode is not None and hasattr(os, "fchmod"):
             # Apply the registry's permissions before copying its contents so a

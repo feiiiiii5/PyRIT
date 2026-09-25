@@ -598,8 +598,8 @@ def test_existing_registry_permissions_are_applied_before_staging_write(tmp_path
     real_fdopen = os.fdopen
     staging_paths = []
 
-    def record_staging_file(file_path):
-        staging_path, fd = real_create_staging_file(file_path)
+    def record_staging_file(file_path, mode=0o666):
+        staging_path, fd = real_create_staging_file(file_path, mode=mode)
         staging_paths.append(staging_path)
         return staging_path, fd
 
@@ -629,6 +629,31 @@ def test_existing_registry_permissions_are_applied_before_staging_write(tmp_path
         _rewrite_jsonl_atomically(path, ['{"value": 2}\n'])
 
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission semantics")
+def test_existing_registry_staging_file_is_private_at_creation(tmp_path):
+    path = tmp_path / "test_metrics.jsonl"
+    path.write_text('{"value": 1}\n', encoding="utf-8")
+    path.chmod(0o600)
+
+    original_umask = os.umask(0o022)
+    real_open = os.open
+    creation_modes = []
+
+    def record_creation_mode(file_path, flags, mode=0o777, **kwargs):
+        fd = real_open(file_path, flags, mode, **kwargs)
+        if Path(file_path).name.startswith(f"{path.name}.tmp-"):
+            creation_modes.append(stat.S_IMODE(Path(file_path).stat().st_mode))
+        return fd
+
+    try:
+        with patch.object(os, "open", side_effect=record_creation_mode):
+            _rewrite_jsonl_atomically(path, ['{"value": 2}\n'])
+    finally:
+        os.umask(original_umask)
+
+    assert creation_modes == [0o600]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX umask semantics")
