@@ -3,6 +3,7 @@
 
 import base64
 import json
+import logging
 import sys
 import types
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -621,6 +622,38 @@ async def test_empty_response_raises(target, litellm_stub):
 
     with pytest.raises(EmptyResponseException):
         await target.send_prompt_async(message=_user_message())
+
+
+async def test_token_limit_truncation_marks_the_piece(target, litellm_stub, caplog):
+    """A response cut off at the token limit keeps its partial answer but must be flagged as truncated."""
+    truncated = _mock_response(content="The answer is", finish_reason="length")
+    litellm_stub.acompletion = AsyncMock(return_value=truncated)
+
+    with caplog.at_level(logging.WARNING):
+        result = await target.send_prompt_async(message=_user_message())
+
+    piece = result[0].message_pieces[0]
+    assert piece.converted_value == "The answer is"
+    assert piece.is_truncated is True
+    assert "finish_reason='length'" in caplog.text
+
+
+async def test_token_limit_truncation_with_no_content_does_not_raise(target, litellm_stub):
+    """Truncation can legitimately empty the response; the run must continue instead of raising."""
+    truncated = _mock_response(content=None, finish_reason="length")
+    truncated.choices[0].message.content = None
+    truncated.choices[0].message.tool_calls = None
+    truncated.choices[0].message.audio = None
+    litellm_stub.acompletion = AsyncMock(return_value=truncated)
+
+    result = await target.send_prompt_async(message=_user_message())
+
+    piece = result[0].message_pieces[0]
+    assert piece.original_value == ""
+    assert piece.response_error == "empty"
+    assert piece.is_truncated is True
+    assert piece.prompt_metadata["token_usage_input_tokens"] == 10
+    assert piece.prompt_metadata["token_usage_output_tokens"] == 5
 
 
 async def test_no_choices_raises_pyrit_exception(target, litellm_stub):
