@@ -524,6 +524,11 @@ class OpenAIResponseTarget(OpenAITarget):
                 counts from ``response.usage`` are recorded in the first piece's ``prompt_metadata``.
                 Truncated responses are flagged via ``MessagePiece.mark_as_truncated`` on the first
                 piece.
+
+        Raises:
+            EmptyResponseException: If a response that is not truncated carries no section PyRIT can
+                read. Reasoning and section types PyRIT does not model (e.g. ``image_generation_call``)
+                are not answers, so reporting them as the model's response would score them as one.
         """
         truncated = self._is_truncated_response(response)
 
@@ -552,9 +557,15 @@ class OpenAIResponseTarget(OpenAITarget):
             if piece.original_value and piece.original_value_data_type != "reasoning":
                 has_visible_response = True
 
-        if truncated and not has_visible_response:
-            empty_piece = build_empty_truncated_response(request=request).message_pieces[0]
-            extracted_response_pieces.append(empty_piece)
+        if not has_visible_response:
+            if truncated:
+                empty_piece = build_empty_truncated_response(request=request).message_pieces[0]
+                extracted_response_pieces.append(empty_piece)
+            else:
+                # A response that completed without a readable section is a failure, not an answer.
+                # The chat target raises in the same situation; reporting reasoning or a section
+                # type PyRIT does not model as the model's response would let it be scored as one.
+                raise EmptyResponseException(message="Failed to extract any response content.")
 
         # Consumers use the first piece as the semantic response. Responses API
         # reasoning commonly precedes the actual message in provider output, so
