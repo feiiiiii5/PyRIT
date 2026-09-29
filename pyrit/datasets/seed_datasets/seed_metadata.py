@@ -256,9 +256,24 @@ class SeedDatasetFilter:
         Warn about contradictory filter configurations.
 
         Raises:
-            ValueError: If strict_match is True and any criterion has multiple
-                values for a singular field (size, source_type).
+            ValueError: If a criterion requests a filter axis with an empty set, or if
+                strict_match is True and any criterion has multiple values for a singular
+                field (size, source_type).
         """
+        # An empty set is not a filter. Without strict_match nothing can overlap with it,
+        # and with strict_match nothing can be outside it, so the same filter would match
+        # either no dataset at all or every dataset, depending on one flag. None is how a
+        # criterion says "this axis is not requested", so keep the empty set out.
+        for criterion in self.criteria:
+            for field in fields(criterion):
+                value = getattr(criterion, field.name)
+                if value is not None and not value:
+                    raise ValueError(
+                        f"'{field.name}' was given an empty set. An empty set matches no "
+                        f"dataset without strict_match and every dataset with it. Pass "
+                        f"None to leave '{field.name}' unfiltered, or drop the argument."
+                    )
+
         # strict_match with multi-valued singular fields is logically impossible.
         # A dataset can't be both "small" AND "large" — these are mutually exclusive.
         if self.strict_match:

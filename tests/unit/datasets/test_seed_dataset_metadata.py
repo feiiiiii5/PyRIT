@@ -264,6 +264,34 @@ class TestStrictMatchSingularFieldValidation:
             )
 
 
+class TestEmptySetAxisValidation:
+    """
+    Test that a filter axis given an empty set is rejected.
+
+    ``None`` means the axis is not requested. An empty set is not the same thing: it
+    matches no dataset without strict_match and every dataset with it, so one flag
+    would decide whether the filter returns nothing or everything.
+    """
+
+    def test_empty_tags_raises(self):
+        with pytest.raises(ValueError, match="empty set"):
+            SeedDatasetFilter(tags=set())
+
+    def test_empty_harm_categories_strict_raises(self):
+        with pytest.raises(ValueError, match="empty set"):
+            SeedDatasetFilter(harm_categories=set(), strict_match=True)
+
+    def test_empty_axis_in_criteria_list_raises(self):
+        with pytest.raises(ValueError, match="empty set"):
+            SeedDatasetFilter(criteria=[SeedDatasetMetadata(modalities=set())])
+
+    def test_none_axis_is_still_accepted(self):
+        """None keeps its meaning: the axis is not requested."""
+        f = SeedDatasetFilter(size=None, harm_categories=None, strict_match=True)
+        assert f.criteria[0].size is None
+        assert f.criteria[0].harm_categories is None
+
+
 class TestFilterProperties:
     """Test that the filter fields populate correctly via flat kwargs."""
 
