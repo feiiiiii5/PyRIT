@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator, model_validator
 
 from pyrit.common import verify_and_resolve_path
 
@@ -19,6 +19,31 @@ class NumericRange(BaseModel):
     minimum_value: int
     maximum_value: int
     category: str | None = None
+
+    @field_validator("minimum_value", "maximum_value", mode="before")
+    @classmethod
+    def _reject_bool(cls, value: Any, info: ValidationInfo) -> Any:
+        """
+        Reject a boolean bound, which Pydantic would otherwise coerce to 0 or 1.
+
+        ``bool`` is a subclass of ``int``, so ``minimum_value: true`` in a rubric
+        YAML silently becomes a 1-point scale. Both other integer fields in the
+        library that accept untyped input reject bool for the same reason
+        (``pyrit.models.target.token_usage`` and ``pyrit.models.parameter``).
+
+        Args:
+            value (Any): The incoming value for the bound.
+            info (ValidationInfo): Validation context naming the field.
+
+        Returns:
+            Any: The value unchanged, when it is not a bool.
+
+        Raises:
+            ValueError: If the value is a bool.
+        """
+        if isinstance(value, bool):
+            raise ValueError(f"{info.field_name} must be an integer, not a bool ({value}).")
+        return value
 
     @model_validator(mode="after")
     def _validate_range(self) -> "NumericRange":

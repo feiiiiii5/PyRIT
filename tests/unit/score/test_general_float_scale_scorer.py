@@ -5,11 +5,12 @@ from textwrap import dedent
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
 from unit.mocks import get_mock_target_identifier
 
 from pyrit.models import Message, MessagePiece
 from pyrit.prompt_target import PromptTarget
-from pyrit.score import NumericRange
+from pyrit.score import NumericRange, NumericRubric
 from pyrit.score.float_scale.self_ask_general_float_scale_scorer import (
     SelfAskGeneralFloatScaleScorer,
 )
@@ -223,6 +224,25 @@ async def test_general_float_scorer_retries_out_of_range_score(patch_central_dat
 def test_general_float_scorer_init_invalid_min_max():
     with pytest.raises(ValueError):
         NumericRange(minimum_value=10, maximum_value=5, category="test")
+
+
+def test_numeric_range_rejects_bool_bounds():
+    # `bool` is a subclass of `int`, so Pydantic used to coerce these silently:
+    # `minimum_value: true` in a rubric YAML became 1, turning a 1..10 scale into
+    # a 1..1 one. A bound has to be an actual number.
+    for field in ("minimum_value", "maximum_value"):
+        with pytest.raises(ValidationError, match="not a bool"):
+            NumericRange(**{"minimum_value": 0, "maximum_value": 10, field: True})
+
+
+def test_numeric_rubric_from_yaml_rejects_bool_bounds(tmp_path):
+    # The YAML path is how a user actually supplies these, and it is where the
+    # coercion was observable: a `true` bound became 1 with no error.
+    rubric = tmp_path / "rubric.yaml"
+    rubric.write_text("category: test\nminimum_value: true\nmaximum_value: 10\n", encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="not a bool"):
+        NumericRubric.from_yaml(rubric)
 
 
 def test_get_scorer_metrics_returns_none_when_eval_hash_is_none(patch_central_database):
