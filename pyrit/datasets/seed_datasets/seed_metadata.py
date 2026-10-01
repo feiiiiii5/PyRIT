@@ -264,15 +264,17 @@ class SeedDatasetFilter:
         # and with strict_match nothing can be outside it, so the same filter would match
         # either no dataset at all or every dataset, depending on one flag. None is how a
         # criterion says "this axis is not requested", so keep the empty set out.
-        for criterion in self.criteria:
-            for field in fields(criterion):
-                value = getattr(criterion, field.name)
-                if value is not None and not value:
-                    raise ValueError(
-                        f"'{field.name}' was given an empty set. An empty set matches no "
-                        f"dataset without strict_match and every dataset with it. Pass "
-                        f"None to leave '{field.name}' unfiltered, or drop the argument."
-                    )
+        empty_axes = sorted(
+            f.name
+            for criterion in self.criteria
+            for f in fields(SeedDatasetMetadata)
+            if getattr(criterion, f.name) is not None and len(getattr(criterion, f.name)) == 0
+        )
+        if empty_axes:
+            raise ValueError(
+                f"Filter axes {empty_axes} were given an empty set, which matches no dataset. "
+                f"Pass None to leave an axis unfiltered, or drop the argument."
+            )
 
         # strict_match with multi-valued singular fields is logically impossible.
         # A dataset can't be both "small" AND "large" — these are mutually exclusive.

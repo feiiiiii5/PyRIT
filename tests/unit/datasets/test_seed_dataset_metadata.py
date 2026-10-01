@@ -285,6 +285,11 @@ class TestEmptySetAxisValidation:
         with pytest.raises(ValueError, match="empty set"):
             SeedDatasetFilter(criteria=[SeedDatasetMetadata(modalities=set())])
 
+    def test_all_empty_axes_are_reported_at_once(self):
+        """Every empty axis is named in one sorted message, not just the first one found."""
+        with pytest.raises(ValueError, match=r"Filter axes \['harm_categories', 'modalities'\]"):
+            SeedDatasetFilter(criteria=[SeedDatasetMetadata(modalities=set(), harm_categories=set())])
+
     def test_none_axis_is_still_accepted(self):
         """None keeps its meaning: the axis is not requested."""
         f = SeedDatasetFilter(size=None, harm_categories=None, strict_match=True)
