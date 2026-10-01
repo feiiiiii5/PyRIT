@@ -74,9 +74,8 @@ class OpenAICompletionTarget(OpenAITarget):
                 constructor. For example, to specify a 3 minute timeout: ``httpx_client_kwargs={"timeout": 180}``
 
         Raises:
-            PyritException: If the temperature or top_p values are out of bounds.
-            ValueError: If the temperature is not between 0 and 2 (inclusive).
-            ValueError: If the top_p is not between 0 and 1 (inclusive).
+            PyritException: If temperature is not between 0 and 2 (inclusive), or top_p is not
+                between 0 and 1 (inclusive).
         """
         super().__init__(custom_configuration=custom_configuration, **kwargs)
 
