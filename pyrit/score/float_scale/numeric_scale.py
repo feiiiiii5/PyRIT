@@ -24,19 +24,17 @@ class NumericRange(BaseModel):
     @classmethod
     def _reject_bool(cls, value: Any, info: ValidationInfo) -> Any:
         """
-        Reject a boolean bound, which Pydantic would otherwise coerce to 0 or 1.
+        Reject a boolean bound, which ``int`` validation would otherwise coerce to 0 or 1.
 
-        ``bool`` is a subclass of ``int``, so ``minimum_value: true`` in a rubric
-        YAML silently becomes a 1-point scale. Both other integer fields in the
-        library that accept untyped input reject bool for the same reason
-        (``pyrit.models.target.token_usage`` and ``pyrit.models.parameter``).
+        ``bool`` subclasses ``int``, so a ``true`` bound in a rubric YAML would be silently
+        reinterpreted as a number and shift or collapse the scale.
 
         Args:
-            value (Any): The incoming value for the bound.
+            value (Any): The incoming bound.
             info (ValidationInfo): Validation context naming the field.
 
         Returns:
-            Any: The value unchanged, when it is not a bool.
+            Any: The value unchanged when it is not a bool.
 
         Raises:
             ValueError: If the value is a bool.

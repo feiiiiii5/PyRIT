@@ -226,18 +226,21 @@ def test_general_float_scorer_init_invalid_min_max():
         NumericRange(minimum_value=10, maximum_value=5, category="test")
 
 
-def test_numeric_range_rejects_bool_bounds():
-    # `bool` is a subclass of `int`, so Pydantic used to coerce these silently:
-    # `minimum_value: true` in a rubric YAML became 1, turning a 1..10 scale into
-    # a 1..1 one. A bound has to be an actual number.
-    for field in ("minimum_value", "maximum_value"):
-        with pytest.raises(ValidationError, match="not a bool"):
-            NumericRange(**{"minimum_value": 0, "maximum_value": 10, field: True})
+@pytest.mark.parametrize(
+    "bounds",
+    [
+        {"minimum_value": True, "maximum_value": 10},
+        {"minimum_value": 0, "maximum_value": True},
+    ],
+)
+def test_numeric_range_rejects_bool_bounds(bounds):
+    # `bool` is a subclass of `int`, so a bool bound has to be rejected rather than coerced to 0 or 1.
+    with pytest.raises(ValidationError, match="not a bool"):
+        NumericRange(**bounds)
 
 
 def test_numeric_rubric_from_yaml_rejects_bool_bounds(tmp_path):
-    # The YAML path is how a user actually supplies these, and it is where the
-    # coercion was observable: a `true` bound became 1 with no error.
+    # The YAML path is how a user actually supplies these bounds.
     rubric = tmp_path / "rubric.yaml"
     rubric.write_text("category: test\nminimum_value: true\nmaximum_value: 10\n", encoding="utf-8")
 
