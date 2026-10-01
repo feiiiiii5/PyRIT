@@ -2216,8 +2216,22 @@ class TreeOfAttacksWithPruningAttack(AttackStrategy[TAPAttackContext, TAPAttackR
 
         if completed_nodes:
             best_node = completed_nodes[0]
+            best_score = best_node.objective_score
+            # An undetermined verdict is the absence of a measurement, not a weak
+            # one, so it must not displace a score a completed node actually
+            # produced. The sort below already ranks undetermined last within a
+            # frontier; this keeps the same rule across frontiers. Reached only
+            # when the whole frontier is undetermined, since that sorts first
+            # otherwise only if no complete node is present.
+            if (
+                best_score is not None
+                and best_score.is_undetermined
+                and context.best_objective_score is not None
+                and not context.best_objective_score.is_undetermined
+            ):
+                return
             context.best_conversation_id = best_node.objective_target_conversation_id
-            context.best_objective_score = best_node.objective_score
+            context.best_objective_score = best_score
             context.best_adversarial_conversation_id = best_node.adversarial_chat_conversation_id
         elif not context.best_conversation_id:
             # Fallback: if no completed nodes and no best_conversation_id yet,

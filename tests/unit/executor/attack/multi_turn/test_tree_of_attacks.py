@@ -1054,6 +1054,55 @@ class TestPruningLogic:
         assert context.best_conversation_id == incomplete_node.objective_target_conversation_id
         assert context.best_objective_score == incomplete_node.objective_score
 
+    def test_update_best_performing_node_keeps_complete_best_when_frontier_is_undetermined(
+        self, basic_attack, node_factory, helpers
+    ):
+        """An undetermined frontier must not overwrite a score that was actually measured."""
+        context = helpers.create_basic_context()
+
+        existing_score = helpers.create_score(0.65)
+        context.best_objective_score = existing_score
+        context.best_conversation_id = "existing_conv_id"
+
+        undetermined_node = node_factory.create_node(NodeMockConfig(node_id="undetermined"))
+        undetermined_node.objective_score = helpers.create_undetermined_score()
+        context.nodes = [undetermined_node]
+
+        basic_attack._update_best_performing_node(context)
+
+        assert context.best_objective_score == existing_score
+        assert context.best_conversation_id == "existing_conv_id"
+
+    def test_update_best_performing_node_adopts_undetermined_when_nothing_measured_yet(
+        self, basic_attack, node_factory, helpers
+    ):
+        """With no prior measurement there is nothing to preserve, so the undetermined node is used."""
+        context = helpers.create_basic_context()
+
+        undetermined_node = node_factory.create_node(NodeMockConfig(node_id="undetermined"))
+        undetermined_node.objective_score = helpers.create_undetermined_score()
+        context.nodes = [undetermined_node]
+
+        basic_attack._update_best_performing_node(context)
+
+        assert context.best_objective_score == undetermined_node.objective_score
+        assert context.best_conversation_id == undetermined_node.objective_target_conversation_id
+
+    def test_update_best_performing_node_prefers_complete_within_frontier(self, basic_attack, node_factory, helpers):
+        """A complete node in the same frontier still wins over an undetermined one."""
+        context = helpers.create_basic_context()
+
+        undetermined_node = node_factory.create_node(NodeMockConfig(node_id="undetermined"))
+        undetermined_node.objective_score = helpers.create_undetermined_score()
+        complete_node = node_factory.create_node(NodeMockConfig(node_id="complete"))
+        complete_node.objective_score = helpers.create_score(0.4)
+        context.nodes = [undetermined_node, complete_node]
+
+        basic_attack._update_best_performing_node(context)
+
+        assert context.best_objective_score == complete_node.objective_score
+        assert context.best_conversation_id == complete_node.objective_target_conversation_id
+
     def test_update_best_performing_node_preserves_existing_best_when_no_valid_nodes(
         self, basic_attack, node_factory, helpers
     ):
