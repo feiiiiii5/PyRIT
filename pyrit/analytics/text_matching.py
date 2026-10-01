@@ -131,6 +131,12 @@ class ApproximateTextMatching(TextMatching):
         """
         if not text:
             return 0.0
+        # A target that is only whitespace carries no content to look for. It is
+        # long enough to form n-grams, so without this it scores a perfect
+        # overlap against any text containing the same run of spaces. The sibling
+        # `ExactTextMatching.is_match` rejects a blank target for the same reason.
+        if not target.strip():
+            return 0.0
         if len(target) < self._n:
             return 0.0
 
