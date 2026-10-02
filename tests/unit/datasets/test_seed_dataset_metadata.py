@@ -290,6 +290,24 @@ class TestEmptySetAxisValidation:
         with pytest.raises(ValueError, match=r"Filter axes \['harm_categories', 'modalities'\]"):
             SeedDatasetFilter(criteria=[SeedDatasetMetadata(modalities=set(), harm_categories=set())])
 
+    def test_all_tag_keeps_an_empty_axis_accepted(self):
+        """'all' bypasses every other field, so an empty axis beside it is ignored, not rejected."""
+        f = SeedDatasetFilter(tags={"all"}, harm_categories=set())
+        assert f.has_all_tag
+        assert f.criteria[0].harm_categories == set()
+
+    @pytest.mark.parametrize("strict_match", [True, False])
+    def test_all_tag_in_one_criterion_covers_an_empty_axis_in_another(self, strict_match):
+        """Composed criteria: one asks for everything, another has an empty axis."""
+        f = SeedDatasetFilter(
+            criteria=[
+                SeedDatasetMetadata(tags={"all"}),
+                SeedDatasetMetadata(modalities=set()),
+            ],
+            strict_match=strict_match,
+        )
+        assert f.has_all_tag
+
     def test_none_axis_is_still_accepted(self):
         """None keeps its meaning: the axis is not requested."""
         f = SeedDatasetFilter(size=None, harm_categories=None, strict_match=True)
