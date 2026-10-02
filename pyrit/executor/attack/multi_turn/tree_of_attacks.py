@@ -531,7 +531,7 @@ class _TreeOfAttacksNode:
             target=self._objective_target,
         )
         persisted_messages = list(
-            self._memory.get_conversation_messages(conversation_id=self.objective_target_conversation_id)
+            await self._memory.get_conversation_messages_async(conversation_id=self.objective_target_conversation_id)
         )
         self._prepended_message_count = len(persisted_messages)
         self._prepended_history_send_context = conversation_manager.create_prepended_history_send_context(
@@ -583,7 +583,7 @@ class _TreeOfAttacksNode:
 
         try:
             # Check if we have an initial prompt to use (bypasses adversarial generation)
-            if self._initial_prompt and self._is_first_turn():
+            if self._initial_prompt and (await self._is_first_turn_async()):
                 response = await self._send_initial_prompt_to_target_async()
             else:
                 # Generate adversarial prompt
@@ -679,7 +679,7 @@ class _TreeOfAttacksNode:
         message = self._modality_router.build_objective_input_message(
             text=prompt,
             last_response=self.last_response,
-            turn_index=0 if self._is_first_turn() else 1,
+            turn_index=0 if (await self._is_first_turn_async()) else 1,
         )
 
         # Send prompt with configured converters
@@ -938,7 +938,7 @@ class _TreeOfAttacksNode:
         logger.error(f"Node {self.node_id}: Unexpected error during execution: {error}")
         self.error_message = f"Execution error: {str(error)}"
 
-    def duplicate(self) -> _TreeOfAttacksNode:
+    async def duplicate_async(self) -> _TreeOfAttacksNode:
         """
         Create a duplicate of this node for branching.
 
@@ -962,7 +962,11 @@ class _TreeOfAttacksNode:
             duplicating successful nodes and pruning unsuccessful ones.
         """
         source_messages = filter_non_replayable_messages(
-            messages=list(self._memory.get_conversation_messages(conversation_id=self.objective_target_conversation_id))
+            messages=list(
+                await self._memory.get_conversation_messages_async(
+                    conversation_id=self.objective_target_conversation_id
+                )
+            )
         )
         _validate_stateful_clone_history_compatibility(
             objective_target=self._objective_target,
@@ -992,12 +996,14 @@ class _TreeOfAttacksNode:
             prepended_conversation_config=self._prepended_conversation_config,
         )
 
-        duplicate_node.objective_target_conversation_id = self._memory.duplicate_conversation(
+        duplicate_node.objective_target_conversation_id = await self._memory.duplicate_conversation_async(
             conversation_id=self.objective_target_conversation_id
         )
         duplicated_messages = filter_non_replayable_messages(
             messages=list(
-                self._memory.get_conversation_messages(conversation_id=duplicate_node.objective_target_conversation_id)
+                await self._memory.get_conversation_messages_async(
+                    conversation_id=duplicate_node.objective_target_conversation_id
+                )
             )
         )
         if self._prepended_history_send_context:
@@ -1020,7 +1026,7 @@ class _TreeOfAttacksNode:
                 bootstrap_message_ids=tuple(message.get_piece().id for message in duplicated_messages),
             )
 
-        duplicate_node.adversarial_chat_conversation_id = self._memory.duplicate_conversation(
+        duplicate_node.adversarial_chat_conversation_id = await self._memory.duplicate_conversation_async(
             conversation_id=self.adversarial_chat_conversation_id
         )
 
@@ -1176,7 +1182,7 @@ class _TreeOfAttacksNode:
             str: The generated adversarial prompt text.
         """
         # Check if this is the first turn or subsequent turn
-        if self._is_first_turn():
+        if await self._is_first_turn_async():
             prompt_text = await self._generate_first_turn_prompt_async(objective)
         else:
             prompt_text = await self._generate_subsequent_turn_prompt_async(objective)
@@ -1211,7 +1217,7 @@ class _TreeOfAttacksNode:
             f"Respond with a JSON object containing a 'prompt' field."
         )
 
-    def _is_first_turn(self) -> bool:
+    async def _is_first_turn_async(self) -> bool:
         """
         Check if this is the first turn of the conversation.
 
@@ -1223,7 +1229,9 @@ class _TreeOfAttacksNode:
             bool: True if the objective target conversation contains no messages beyond the
                 prepended conversation (first turn), False otherwise (subsequent turns).
         """
-        target_messages = self._memory.get_conversation_messages(conversation_id=self.objective_target_conversation_id)
+        target_messages = await self._memory.get_conversation_messages_async(
+            conversation_id=self.objective_target_conversation_id
+        )
         return len(target_messages) <= self._prepended_message_count
 
     async def _generate_first_turn_prompt_async(self, objective: str) -> str:
@@ -1253,9 +1261,10 @@ class _TreeOfAttacksNode:
         # and sets it on this node's adversarial conversation. Owning setup in the manager keeps
         # schema resolution and the system-prompt contract identical across every adversarial-chat
         # attack rather than hand-rolled here.
-        self._build_adversarial_manager().set_adversarial_system_prompt(
-            desired_prefix=self._desired_response_prefix,
-            conversation_context=self._conversation_context,
+        (
+            await self._build_adversarial_manager().set_adversarial_system_prompt_async(
+                desired_prefix=self._desired_response_prefix, conversation_context=self._conversation_context
+            )
         )
 
         logger.debug(f"Node {self.node_id}: Using initial seed prompt for first turn")
@@ -1291,7 +1300,9 @@ class _TreeOfAttacksNode:
                 one prior exchange.
         """
         # Get conversation history
-        target_messages = self._memory.get_conversation_messages(conversation_id=self.objective_target_conversation_id)
+        target_messages = await self._memory.get_conversation_messages_async(
+            conversation_id=self.objective_target_conversation_id
+        )
 
         # Extract the last assistant response
         assistant_responses = [r for r in target_messages if r.get_piece().api_role == "assistant"]
@@ -1337,7 +1348,7 @@ class _TreeOfAttacksNode:
             list. It takes the first score if multiple scores are associated with the response,
             which is typically the objective score in the TAP algorithm context.
         """
-        scores = self._memory.get_prompt_scores(prompt_ids=[str(response_id)])
+        scores = await self._memory.get_prompt_scores_async(prompt_ids=[str(response_id)])
         if scores:
             return str(normalize_score_to_float(scores[0]))
         return "unavailable"
@@ -1940,13 +1951,13 @@ class TreeOfAttacksWithPruningAttack(AttackStrategy[TAPAttackContext, TAPAttackR
             # Check termination conditions
             if self._is_objective_achieved(context):
                 self._logger.info("TAP attack achieved objective - attack successful!")
-                return self._create_success_result(context)
+                return await self._create_success_result_async(context)
 
             if self._all_nodes_pruned(context):
                 self._logger.warning("All branches have been pruned - stopping attack.")
                 break
 
-        return self._create_failure_result(context)
+        return await self._create_failure_result_async(context)
 
     async def _teardown_async(self, *, context: TAPAttackContext) -> None:
         """
@@ -1979,7 +1990,7 @@ class TreeOfAttacksWithPruningAttack(AttackStrategy[TAPAttackContext, TAPAttackR
         if not context.nodes:
             await self._initialize_first_level_nodes_async(context)
         else:
-            self._branch_existing_nodes(context)
+            (await self._branch_existing_nodes_async(context))
 
     async def _execute_iteration_async(self, context: TAPAttackContext) -> None:
         """
@@ -2080,7 +2091,7 @@ class TreeOfAttacksWithPruningAttack(AttackStrategy[TAPAttackContext, TAPAttackR
         # Clear next_message after initialization (it's been used by the first node)
         context.next_message = None
 
-    def _branch_existing_nodes(self, context: TAPAttackContext) -> None:
+    async def _branch_existing_nodes_async(self, context: TAPAttackContext) -> None:
         """
         Branch existing nodes to create new exploration paths.
 
@@ -2096,7 +2107,7 @@ class TreeOfAttacksWithPruningAttack(AttackStrategy[TAPAttackContext, TAPAttackR
 
         for node in context.nodes:
             for _ in range(self._configuration.branching_factor - 1):
-                cloned_node = node.duplicate()
+                cloned_node = await node.duplicate_async()
                 # Add the adversarial chat conversation ID of the duplicated node to the context's tracking
                 context.related_conversations.add(
                     ConversationReference(
@@ -2413,7 +2424,7 @@ class TreeOfAttacksWithPruningAttack(AttackStrategy[TAPAttackContext, TAPAttackR
             )
         )
 
-    def _create_success_result(self, context: TAPAttackContext) -> TAPAttackResult:
+    async def _create_success_result_async(self, context: TAPAttackContext) -> TAPAttackResult:
         """
         Create a success result for the attack.
 
@@ -2431,13 +2442,11 @@ class TreeOfAttacksWithPruningAttack(AttackStrategy[TAPAttackContext, TAPAttackR
         score_value = normalize_score_to_float(context.best_objective_score)
         outcome_reason = f"Achieved score {score_value:.2f} >= threshold {self._attack_scoring_config.threshold}"
 
-        return self._create_attack_result(
-            context=context,
-            outcome=AttackOutcome.SUCCESS,
-            outcome_reason=outcome_reason,
+        return await self._create_attack_result_async(
+            context=context, outcome=AttackOutcome.SUCCESS, outcome_reason=outcome_reason
         )
 
-    def _create_failure_result(self, context: TAPAttackContext) -> TAPAttackResult:
+    async def _create_failure_result_async(self, context: TAPAttackContext) -> TAPAttackResult:
         """
         Create a failure result for the attack.
 
@@ -2455,7 +2464,7 @@ class TreeOfAttacksWithPruningAttack(AttackStrategy[TAPAttackContext, TAPAttackR
         """
         best_score = context.best_objective_score
         if best_score is not None and attack_outcome_from_score(best_score) is AttackOutcome.UNDETERMINED:
-            return self._create_attack_result(
+            return await self._create_attack_result_async(
                 context=context,
                 outcome=AttackOutcome.UNDETERMINED,
                 outcome_reason=getattr(best_score, "score_rationale", None)
@@ -2465,13 +2474,11 @@ class TreeOfAttacksWithPruningAttack(AttackStrategy[TAPAttackContext, TAPAttackR
         normalized_best = normalize_score_to_float(best_score)
         outcome_reason = f"Did not achieve threshold score. Best score: {normalized_best:.2f}"
 
-        return self._create_attack_result(
-            context=context,
-            outcome=AttackOutcome.FAILURE,
-            outcome_reason=outcome_reason,
+        return await self._create_attack_result_async(
+            context=context, outcome=AttackOutcome.FAILURE, outcome_reason=outcome_reason
         )
 
-    def _create_attack_result(
+    async def _create_attack_result_async(
         self,
         *,
         context: TAPAttackContext,
@@ -2497,9 +2504,8 @@ class TreeOfAttacksWithPruningAttack(AttackStrategy[TAPAttackContext, TAPAttackR
                 about the attack execution, including conversation ID, objective, outcome,
                 outcome reason, executed turns, last response, last score, and additional metadata.
         """
-        last_response = self._get_result_response(
-            conversation_id=context.best_conversation_id,
-            score=context.best_objective_score,
+        last_response = await self._get_result_response_async(
+            conversation_id=context.best_conversation_id, score=context.best_objective_score
         )
 
         auxiliary_scores_summary = self._get_auxiliary_scores_summary(context.best_auxiliary_scores)
@@ -2531,7 +2537,7 @@ class TreeOfAttacksWithPruningAttack(AttackStrategy[TAPAttackContext, TAPAttackR
 
         return result
 
-    def _get_result_response(
+    async def _get_result_response_async(
         self,
         *,
         conversation_id: str | None,
@@ -2569,10 +2575,7 @@ class TreeOfAttacksWithPruningAttack(AttackStrategy[TAPAttackContext, TAPAttackR
             if not message_piece_id:
                 return None
 
-            responses = self._memory.get_message_pieces(
-                conversation_id=conversation_id,
-                role="assistant",
-            )
+            responses = await self._memory.get_message_pieces_async(conversation_id=conversation_id, role="assistant")
             return next(
                 (
                     response
@@ -2583,9 +2586,9 @@ class TreeOfAttacksWithPruningAttack(AttackStrategy[TAPAttackContext, TAPAttackR
                 None,
             )
 
-        return self._get_last_response_from_conversation(conversation_id)
+        return await self._get_last_response_from_conversation_async(conversation_id)
 
-    def _get_last_response_from_conversation(self, conversation_id: str | None) -> MessagePiece | None:
+    async def _get_last_response_from_conversation_async(self, conversation_id: str | None) -> MessagePiece | None:
         """
         Retrieve the last response from a conversation.
 
@@ -2604,7 +2607,7 @@ class TreeOfAttacksWithPruningAttack(AttackStrategy[TAPAttackContext, TAPAttackR
         if not conversation_id:
             return None
 
-        responses = self._memory.get_message_pieces(conversation_id=conversation_id)
+        responses = await self._memory.get_message_pieces_async(conversation_id=conversation_id)
         return responses[-1] if responses else None
 
     def _get_auxiliary_scores_summary(self, auxiliary_scores: dict[str, Score]) -> dict[str, float]:

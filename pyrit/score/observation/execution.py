@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 _ObservationEvidence: TypeAlias = Message | ToolEventsObservationPayload
 
 
-def _scored_evidence_digest(
+async def _scored_evidence_digest_async(
     *,
     scorable: ScorableUnion,
     scored_piece_id: uuid.UUID,
@@ -55,10 +55,10 @@ def _scored_evidence_digest(
         NonReplayableObservationError: If the scored evidence cannot be resolved.
     """
     if isinstance(scorable, MessageScorable) and scored_message_piece is None:
-        pieces = memory.get_message_pieces(prompt_ids=[scored_piece_id])
+        pieces = await memory.get_message_pieces_async(prompt_ids=[scored_piece_id])
         scored_message_piece = next((piece for piece in pieces if piece.id == scored_piece_id), None)
     content_id = scorable.content_id if isinstance(scorable, ContentEntryScorable) else None
-    stored_content = _load_content_evidence(memory=memory, content_id=content_id)
+    stored_content = await _load_content_evidence_async(memory=memory, content_id=content_id)
     try:
         return _resolved_scored_evidence_digest(
             scorable=scorable,
@@ -70,7 +70,7 @@ def _scored_evidence_digest(
         raise NonReplayableObservationError(str(error)) from error
 
 
-def _load_content_evidence(
+async def _load_content_evidence_async(
     *, memory: MemoryInterface, content_id: uuid.UUID | None
 ) -> tuple[ContentScorable, str] | None:
     """
@@ -81,8 +81,8 @@ def _load_content_evidence(
     """
     if content_id is None:
         return None
-    content = memory.get_scorable_content(content_ids=[content_id]).get(content_id)
-    digest = memory.get_scorable_content_hashes(content_ids=[content_id]).get(content_id)
+    content = (await memory.get_scorable_content_async(content_ids=[content_id])).get(content_id)
+    digest = (await memory.get_scorable_content_hashes_async(content_ids=[content_id])).get(content_id)
     return (content, digest) if content is not None and digest is not None else None
 
 
@@ -300,7 +300,7 @@ class _ObservationEvidenceResolver:
         """Initialize the resolver with the observation store."""
         self._memory = memory
 
-    def resolve(self, *, observation: Observation) -> _ObservationEvidence:
+    async def resolve_async(self, *, observation: Observation) -> _ObservationEvidence:
         """
         Resolve an observation's managed response references.
 
@@ -313,9 +313,11 @@ class _ObservationEvidenceResolver:
         payload = observation.payload
         if isinstance(payload, ToolEventsObservationPayload):
             return payload
-        pieces = self._memory.get_message_pieces(prompt_ids=list(observation.evidence_message_piece_ids))
+        pieces = await self._memory.get_message_pieces_async(prompt_ids=list(observation.evidence_message_piece_ids))
         pieces_by_id = {piece.id: piece for piece in pieces}
-        stored_content = _load_content_evidence(memory=self._memory, content_id=observation.scorable_content_id)
+        stored_content = await _load_content_evidence_async(
+            memory=self._memory, content_id=observation.scorable_content_id
+        )
         try:
             observation.validate_evidence(
                 message_pieces=pieces_by_id,
