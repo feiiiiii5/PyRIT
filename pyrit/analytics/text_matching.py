@@ -114,6 +114,9 @@ class ApproximateTextMatching(TextMatching):
         Returns:
             bool: True if n-gram overlap score exceeds threshold, False otherwise.
         """
+        if not target.strip():
+            return False
+
         score = self._calculate_ngram_overlap(target=target, text=text)
         return score >= self._threshold
 

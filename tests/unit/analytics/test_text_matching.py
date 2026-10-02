@@ -110,6 +110,10 @@ class TestApproximateTextMatching:
         assert matcher.is_match(target="   ", text="x   y") is False
         assert matcher.get_overlap_score(target="   ", text="x   y") == 0.0
 
+    def test_whitespace_only_target_with_zero_threshold(self):
+        matcher = ApproximateTextMatching(threshold=0.0, n=3)
+        assert matcher.is_match(target="   ", text="x   y") is False
+
     def test_whitespace_only_target_is_not_confused_with_a_padded_real_target(self):
         # Stripping only decides whether the target is blank; a target that has
         # real content still matches, padding and all.
