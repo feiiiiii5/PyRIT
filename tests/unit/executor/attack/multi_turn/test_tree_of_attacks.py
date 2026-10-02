@@ -1059,7 +1059,7 @@ class TestPruningLogic:
         assert context.best_objective_score == existing_score
         assert context.best_conversation_id == "existing_conv_id"
 
-    def test_result_keeps_auxiliary_scores_from_measured_best_when_frontier_is_undetermined(
+    async def test_result_keeps_auxiliary_scores_from_measured_best_when_frontier_is_undetermined(
         self, basic_attack, node_factory, helpers
     ):
         """An undetermined frontier must not replace auxiliary scores from the selected node."""
@@ -1076,7 +1076,7 @@ class TestPruningLogic:
         context.nodes = [undetermined_node]
         basic_attack._update_best_performing_node(context)
 
-        result = basic_attack._create_failure_result(context=context)
+        result = await basic_attack._create_failure_result_async(context=context)
 
         assert result.auxiliary_scores_summary == {"measured_auxiliary": 0.4}
 
