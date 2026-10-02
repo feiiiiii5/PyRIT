@@ -559,9 +559,11 @@ class OpenAIResponseTarget(OpenAITarget):
                 piece.
 
         Raises:
-            EmptyResponseException: If a response that is not truncated carries no section PyRIT can
+            PyritException: If a response that is not truncated carries no section PyRIT can
                 read. Reasoning and section types PyRIT does not model (e.g. ``image_generation_call``)
                 are not answers, so reporting them as the model's response would score them as one.
+                This is raised rather than ``EmptyResponseException`` so that
+                ``@pyrit_target_retry`` does not re-send a request whose outcome is deterministic.
         """
         truncated = self._is_truncated_response(response)
 
@@ -598,7 +600,11 @@ class OpenAIResponseTarget(OpenAITarget):
                 # A response that completed without a readable section is a failure, not an answer.
                 # The chat target raises in the same situation; reporting reasoning or a section
                 # type PyRIT does not model as the model's response would let it be scored as one.
-                raise EmptyResponseException(message="Failed to extract any response content.")
+                # Not retried: the response completed, so an unmodelled section type is
+                # deterministic and re-sending the same request bills the same outcome again.
+                # doc/contributing/9_exception.md scopes @pyrit_target_retry to rate limits
+                # and parse failures; this is neither.
+                raise PyritException(message="Failed to extract any response content.")
 
         # Consumers use the first piece as the semantic response. Responses API
         # reasoning commonly precedes the actual message in provider output, so

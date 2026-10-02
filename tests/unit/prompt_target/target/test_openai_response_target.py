@@ -1675,8 +1675,14 @@ async def test_construct_message_completed_without_readable_output_raises(
     """A completed response with nothing PyRIT can read is an error, not a reasoning-only answer."""
     response = _make_completed_response(output=[_make_reasoning_section(), _make_unreadable_section()])
 
-    with pytest.raises(EmptyResponseException):
+    with pytest.raises(PyritException) as excinfo:
         await target._construct_message_from_response_async(response, dummy_text_message_piece)
+
+    # Deliberately not an EmptyResponseException: @pyrit_target_retry retries that
+    # type, and a section type PyRIT does not model comes back identically on every
+    # attempt, so retrying only bills the same outcome again.
+    assert not isinstance(excinfo.value, EmptyResponseException)
+    assert type(excinfo.value) is PyritException
 
 
 async def test_construct_message_completed_keeps_readable_output_next_to_unreadable(
