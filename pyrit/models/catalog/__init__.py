@@ -20,6 +20,11 @@ from pyrit.common.lazy_imports import get_lazy_dir, resolve_lazy_export
 
 if TYPE_CHECKING:
     from pyrit.models.catalog.initializer import RegisteredInitializer
+    from pyrit.models.catalog.scorer import (
+        ObjectiveScorerCatalog,
+        ObjectiveScorerIncompatibility,
+        ObjectiveScorerSummary,
+    )
     from pyrit.models.catalog.scenario import (
         AttackErrorSummary,
         AttackRetrySummary,
@@ -43,6 +48,9 @@ if TYPE_CHECKING:
 _LAZY_EXPORTS: dict[str, str] = {
     "AttackErrorSummary": "pyrit.models.catalog.scenario",
     "AttackRetrySummary": "pyrit.models.catalog.scenario",
+    "ObjectiveScorerCatalog": "pyrit.models.catalog.scorer",
+    "ObjectiveScorerIncompatibility": "pyrit.models.catalog.scorer",
+    "ObjectiveScorerSummary": "pyrit.models.catalog.scorer",
     "RegisteredInitializer": "pyrit.models.catalog.initializer",
     "RegisteredScenario": "pyrit.models.catalog.scenario",
     "RunScenarioRequest": "pyrit.models.catalog.scenario",
