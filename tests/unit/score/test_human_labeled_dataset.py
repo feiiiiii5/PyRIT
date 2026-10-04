@@ -630,3 +630,23 @@ def test_scorer_eval_csv_loads_with_human_labeled_dataset(csv_file, metrics_type
     # - Invalid data formats
     dataset = HumanLabeledDataset.from_csv(csv_path=csv_file, metrics_type=metrics_type)
     assert len(dataset.entries) > 0, f"Dataset {csv_file.name} has no entries"
+
+
+def test_from_csv_preserves_hash_characters_in_cells(tmp_path):
+    """A literal '#' inside an unquoted cell must not truncate the row (#2974)."""
+    csv_file = tmp_path / "hash_cells.csv"
+    csv_file.write_text(
+        "# dataset_version=1.0\n"
+        "assistant_response,human_score,objective\n"
+        "# Heading,1,respond to the prompt\n"
+        "ordinary response,0,mentions C#\n",
+        encoding="utf-8",
+    )
+
+    dataset = HumanLabeledDataset.from_csv(
+        csv_path=str(csv_file),
+        metrics_type=MetricsType.OBJECTIVE,
+    )
+    assert len(dataset.entries) == 2
+    assert dataset.entries[0].objective == "respond to the prompt"
+    assert dataset.entries[1].objective == "mentions C#"

@@ -270,11 +270,20 @@ class HumanLabeledDataset:
         if not harm_definition_version and parsed_harm_definition_version:
             harm_definition_version = parsed_harm_definition_version
 
+        # Skip the leading "#" comment line(s) instead of relying on comment="#",
+        # which also truncates the remainder of unquoted cells containing "#" (#2974).
+        skiprows = 0
+        with open(csv_path, encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if line.lstrip().startswith("#"):
+                    skiprows += 1
+                else:
+                    break
         # Try UTF-8 first, fall back to latin-1 for files with special characters
         try:
-            eval_df = pd.read_csv(csv_path, comment="#", encoding="utf-8")
+            eval_df = pd.read_csv(csv_path, skiprows=skiprows or None, encoding="utf-8")
         except UnicodeDecodeError:
-            eval_df = pd.read_csv(csv_path, comment="#", encoding="latin-1")
+            eval_df = pd.read_csv(csv_path, skiprows=skiprows or None, encoding="latin-1")
 
         # Drop rows where every column is NaN (e.g. trailing blank lines in the CSV)
         eval_df = eval_df.dropna(how="all")
