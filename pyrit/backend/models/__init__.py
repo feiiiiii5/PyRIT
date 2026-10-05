@@ -63,6 +63,12 @@ if TYPE_CHECKING:
         RegisterInitializerRequest,
     )
     from pyrit.backend.models.scenarios import ListRegisteredScenariosResponse, ScenarioRunListResponse
+    from pyrit.backend.models.scorers import (
+        CreateScorerRequest,
+        ScorerListResponse,
+        ScorerTypeEntry,
+        ScorerTypeResponse,
+    )
     from pyrit.backend.models.targets import CreateTargetRequest, TargetListResponse
 
 _LAZY_EXPORTS: dict[str, str | tuple[str, str | None]] = {
@@ -107,6 +113,10 @@ _LAZY_EXPORTS: dict[str, str | tuple[str, str | None]] = {
     "DatasetInfo": "pyrit.backend.models.datasets",
     "DatasetListResponse": "pyrit.backend.models.datasets",
     "ListRegisteredScenariosResponse": "pyrit.backend.models.scenarios",
+    "CreateScorerRequest": "pyrit.backend.models.scorers",
+    "ScorerListResponse": "pyrit.backend.models.scorers",
+    "ScorerTypeEntry": "pyrit.backend.models.scorers",
+    "ScorerTypeResponse": "pyrit.backend.models.scorers",
     "ScenarioRunListResponse": "pyrit.backend.models.scenarios",
     "ListRegisteredInitializersResponse": "pyrit.backend.models.initializers",
     "RegisterInitializerRequest": "pyrit.backend.models.initializers",

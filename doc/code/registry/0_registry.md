@@ -80,6 +80,14 @@ orders have the same metadata, `type_name: "Path | str"`, including after a JSON
 round-trip. Optional forms accept `None` in Python; the display type omits `None`,
 as it does for other optional parameters.
 
+The backend exposes scorer types at `GET /api/scorers/types`, lists registered
+instances at `GET /api/scorers`, retrieves one at `GET /api/scorers/{name}`, and
+creates one with `POST /api/scorers` (`name`, `type`, and optional `params`). The
+type response uses the registry's shared `Parameter` contract. Instance responses
+include the complete `ScorerIdentifier`, including nested scorer and target
+identifiers; target identifiers apply their existing credential-exclusion rules.
+Construction and reference resolution remain owned by `ScorerRegistry`.
+
 The backend owns file-upload handling and cleanup, not the registry. See the
 [registry API migration notes](../../gui/0_gui.md#registry-api-migration-notes)
 for the REST contract and temporary compatibility behavior.
