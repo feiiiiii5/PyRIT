@@ -4,7 +4,6 @@
 """Service for scorer class discovery and registered instances."""
 
 import asyncio
-import threading
 from functools import lru_cache
 from typing import Any
 
@@ -26,7 +25,6 @@ class ScorerService:
     def __init__(self) -> None:
         """Initialize the service with the scorer registry singleton."""
         self._registry = ScorerRegistry.get_registry_singleton()
-        self._registry_lock = threading.RLock()
 
     def _build_instance(self, *, name: str, scorer: Any) -> ScorerInstance:
         metadata = self._registry.get_registered_class_metadata(scorer.__class__.__name__)
@@ -67,26 +65,19 @@ class ScorerService:
         """
 
         def list_instances() -> ScorerListResponse:
-            with self._registry_lock:
-                items = sorted(
-                    (
-                        self._build_instance(name=entry.name, scorer=entry.instance)
-                        for entry in self._registry.instances.get_all_instances()
-                    ),
-                    key=lambda item: item.scorer_registry_name,
-                )
-                start = next((index + 1 for index, item in enumerate(items) if item.scorer_registry_name == cursor), 0)
-                page = items[start : start + limit]
-                has_more = len(items) > start + limit
-                return ScorerListResponse(
-                    items=page,
-                    pagination=PaginationInfo(
-                        limit=limit,
-                        has_more=has_more,
-                        next_cursor=page[-1].scorer_registry_name if page and has_more else None,
-                        prev_cursor=cursor,
-                    ),
-                )
+            entries = self._registry.instances.get_all_instances()
+            start = next((index + 1 for index, entry in enumerate(entries) if entry.name == cursor), 0)
+            page = entries[start : start + limit]
+            has_more = len(entries) > start + limit
+            return ScorerListResponse(
+                items=[self._build_instance(name=entry.name, scorer=entry.instance) for entry in page],
+                pagination=PaginationInfo(
+                    limit=limit,
+                    has_more=has_more,
+                    next_cursor=page[-1].name if page and has_more else None,
+                    prev_cursor=cursor,
+                ),
+            )
 
         return await asyncio.to_thread(list_instances)
 
@@ -99,9 +90,8 @@ class ScorerService:
         """
 
         def get_instance() -> ScorerInstance | None:
-            with self._registry_lock:
-                scorer = self._registry.instances.get(scorer_registry_name)
-                return self._build_instance(name=scorer_registry_name, scorer=scorer) if scorer is not None else None
+            scorer = self._registry.instances.get(scorer_registry_name)
+            return self._build_instance(name=scorer_registry_name, scorer=scorer) if scorer is not None else None
 
         return await asyncio.to_thread(get_instance)
 
@@ -114,15 +104,14 @@ class ScorerService:
         """
 
         def create() -> ScorerInstance:
-            with self._registry_lock:
-                if request.type not in self._registry:
-                    raise ValueError(f"Scorer type '{request.type}' not found")
-                scorer = self._registry.create_named_instance(
-                    name=request.name,
-                    type_name=request.type,
-                    params=request.params,
-                )
-                return self._build_instance(name=request.name, scorer=scorer)
+            if request.type not in self._registry:
+                raise ValueError(f"Scorer type '{request.type}' not found")
+            scorer = self._registry.create_named_instance(
+                name=request.name,
+                type_name=request.type,
+                params=request.params,
+            )
+            return self._build_instance(name=request.name, scorer=scorer)
 
         return await asyncio.to_thread(create)
 
