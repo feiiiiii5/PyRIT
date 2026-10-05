@@ -308,6 +308,35 @@ class TestEmptySetAxisValidation:
         )
         assert f.has_all_tag
 
+    def test_all_tag_keeps_multi_valued_singular_fields(self):
+        """'all' leaves strict_match nothing to decide, so it must not raise on it.
+
+        size is singular, so {"small", "large"} under strict_match is rejected
+        everywhere else. Beside 'all' the tag has already bypassed the axis, and
+        the warning below says strict_match has no effect, so raising would
+        contradict the warning the caller is about to be given.
+        """
+        f = SeedDatasetFilter(tags={"all"}, size={"small", "large"}, strict_match=True)
+        assert f.has_all_tag
+        assert f.criteria[0].size == {"small", "large"}
+
+    def test_multi_valued_singular_fields_still_raise_without_all(self):
+        """The control: the same input without 'all' is still rejected."""
+        with pytest.raises(ValueError, match="logically impossible"):
+            SeedDatasetFilter(size={"small", "large"}, strict_match=True)
+
+    def test_empty_axis_message_covers_both_strict_match_outcomes(self):
+        """The message must not claim 'matches no dataset' unconditionally.
+
+        With strict_match an empty set matches every dataset that declares the
+        axis, so the old wording was wrong for half the flag's values.
+        """
+        with pytest.raises(ValueError) as exc:
+            SeedDatasetFilter(modalities=set(), strict_match=True)
+        message = str(exc.value)
+        assert "matches no dataset" in message
+        assert "every dataset that declares the axis" in message
+
     def test_none_axis_is_still_accepted(self):
         """None keeps its meaning: the axis is not requested."""
         f = SeedDatasetFilter(size=None, harm_categories=None, strict_match=True)

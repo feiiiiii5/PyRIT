@@ -258,7 +258,7 @@ class SeedDatasetFilter:
         Raises:
             ValueError: If a criterion requests a filter axis with an empty set, or if
                 strict_match is True and any criterion has multiple values for a singular
-                field (size, source_type). The empty-axis check is skipped when any criterion
+                field (size, source_type). Both checks are skipped when any criterion
                 carries the 'all' tag, since 'all' bypasses every other field.
         """
         # An empty set is not a filter. Without strict_match nothing can overlap with it,
@@ -282,13 +282,18 @@ class SeedDatasetFilter:
         )
         if empty_axes:
             raise ValueError(
-                f"Filter axes {empty_axes} were given an empty set, which matches no dataset. "
-                f"Pass None to leave an axis unfiltered, or drop the argument."
+                f"Filter axes {empty_axes} were given an empty set. Without strict_match "
+                f"that matches no dataset, and with strict_match it matches every dataset "
+                f"that declares the axis. Pass None to leave an axis unfiltered, or drop the argument."
             )
 
         # strict_match with multi-valued singular fields is logically impossible.
         # A dataset can't be both "small" AND "large" — these are mutually exclusive.
-        if self.strict_match:
+        #
+        # Skipped under 'all' for the same reason as the empty-axis check above: the tag
+        # bypasses every other field, so strict_match has nothing left to decide. Warning
+        # about it below instead of raising keeps the two paths consistent.
+        if self.strict_match and not self.has_all_tag:
             for criterion in self.criteria:
                 for field_name in SeedDatasetMetadata.SINGULAR_FIELDS:
                     value = getattr(criterion, field_name)
