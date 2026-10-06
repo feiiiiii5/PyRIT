@@ -5,6 +5,7 @@ import errno
 import json
 import os
 import stat
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import patch
 
@@ -810,7 +811,7 @@ def _reject_constant(token: str):
 
 
 @pytest.mark.parametrize("write", [add_evaluation_results, replace_evaluation_results], ids=["add", "replace"])
-def test_registry_entry_with_undefined_statistics_is_valid_json(*, tmp_path: Path, write) -> None:
+def test_registry_entry_with_undefined_statistics_is_valid_json(*, tmp_path: Path, write: Callable[..., None]) -> None:
     """
     A t-test that is undefined is reported as NaN by the evaluator (see ``ScorerMetrics`` docs).
     Writing that through ``json.dumps`` emits the bare ``NaN`` token, which is not JSON, so the
@@ -832,3 +833,16 @@ def test_registry_entry_with_undefined_statistics_is_valid_json(*, tmp_path: Pat
     assert loaded.t_statistic is None
     assert loaded.p_value is None
     assert loaded.mean_absolute_error == 0.08
+
+    saved_path = tmp_path / "harm" / "saved_metrics.jsonl"
+    write(file_path=saved_path, scorer_identifier=identifier, eval_hash="nan-hash", metrics=loaded)
+
+    saved_data = json.loads(saved_path.read_text(encoding="utf-8").strip(), parse_constant=_reject_constant)
+    assert saved_data["metrics"]["t_statistic"] is None
+    assert saved_data["metrics"]["p_value"] is None
+
+    reloaded = find_harm_metrics_by_eval_hash(eval_hash="nan-hash", file_path=saved_path)
+    assert reloaded is not None
+    assert reloaded.t_statistic is None
+    assert reloaded.p_value is None
+    assert reloaded.mean_absolute_error == 0.08

@@ -12,7 +12,7 @@ import os
 import secrets
 import stat
 import threading
-from dataclasses import asdict
+from dataclasses import MISSING, asdict, fields
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -50,10 +50,13 @@ def _metrics_to_registry_dict(metrics: ScorerMetrics) -> dict[str, Any]:
     Excludes:
     - trial_scores (too large for registry storage)
     - Internal fields starting with '_'
+    - None values for fields with defaults
 
     A statistic that is not a number (``NaN``) is kept, written as ``None`` so it serializes to
     JSON ``null``: it carries the information that the value is undefined, which dropping the key
     would lose, and the loading side declares those fields ``float | None``.
+    Required fields retain ``None`` when loaded metrics are saved again, so the entry can still
+    be loaded through the metrics constructor.
 
     Args:
         metrics (ScorerMetrics): The metrics object to convert.
@@ -63,7 +66,16 @@ def _metrics_to_registry_dict(metrics: ScorerMetrics) -> dict[str, Any]:
     """
     metrics_dict = asdict(metrics)
     excluded_keys = {"trial_scores"}
-    kept = {k: v for k, v in metrics_dict.items() if k not in excluded_keys and v is not None and not k.startswith("_")}
+    required_keys = {
+        metric_field.name
+        for metric_field in fields(metrics)
+        if metric_field.init and metric_field.default is MISSING and metric_field.default_factory is MISSING
+    }
+    kept = {
+        k: v
+        for k, v in metrics_dict.items()
+        if k not in excluded_keys and not k.startswith("_") and (v is not None or k in required_keys)
+    }
     return non_finite_to_none(kept)
 
 
