@@ -150,14 +150,7 @@ class GandalfScorer(MessageTrueFalseScorer):
         words = stripped.split()
         leading_token = words[0] if words else ""
         if leading_token.strip(_SENTINEL_PUNCTUATION).casefold() == _NO_SENTINEL:
-            if len(words) == 1:
-                return ""
-            # "NO, I cannot help" starts the same way but is a refusal, not a guess.
-            # Posting it would mislead the caller with "Invalid password found in text."
-            # and burn a request against the Gandalf API.
-            raise PyritException(
-                message=f"Password search utility did not return a bare password or 'NO': {response_text!r}"
-            )
+            return ""
         return response_text
 
     async def _score_piece_async(self, message_piece: MessagePiece, *, objective: str | None = None) -> list[Score]:

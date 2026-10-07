@@ -201,17 +201,15 @@ async def test_gandalf_scorer_accepts_no_sentinel_case_and_punctuation_variants(
     assert scores[0].score_rationale == "No password found in text."
 
 
+@pytest.mark.parametrize("negative_reply", ["NO, I cannot help", "No. No password was found.", "no\nI cannot help"])
 @patch("pyrit.score.true_false.gandalf_scorer.make_request_and_raise_if_error_async", new_callable=AsyncMock)
-async def test_gandalf_scorer_rejects_prose_instead_of_guessing_a_password(
-    mocked_post, sqlite_instance: MemoryInterface
-):
-    """A sentence that merely starts with the sentinel is not a bare "no" and must not be posted.
-
-    Without this, "NO, I cannot help" is submitted to Gandalf as a password guess.
-    """
+async def test_gandalf_scorer_scores_negative_prose_as_false_async(
+    mocked_post: AsyncMock, *, sqlite_instance: MemoryInterface, negative_reply: str
+) -> None:
+    """A negative reply returns False without a password guess."""
     conversation_id = str(uuid.uuid4())
     (await sqlite_instance.add_message_to_memory_async(request=generate_request(conversation_id=conversation_id)))
-    response = generate_password_extraction_response("NO, I cannot help", conversation_id=conversation_id)
+    response = generate_password_extraction_response(negative_reply, conversation_id=conversation_id)
     (await sqlite_instance.add_message_to_memory_async(request=response))
 
     chat_target = MagicMock(spec=PromptTarget)
@@ -221,10 +219,11 @@ async def test_gandalf_scorer_rejects_prose_instead_of_guessing_a_password(
     scorer = GandalfScorer(level=GandalfLevel.LEVEL_1, chat_target=chat_target)
     mocked_post.return_value = MagicMock(json=lambda: {"success": False, "message": "Message"})
 
-    with pytest.raises(PyritException, match="did not return a bare password or 'NO'"):
-        await scorer.score_async(scorable=MessageScorable.from_message(await store_message_async(response)))
+    scores = await scorer.score_async(scorable=MessageScorable.from_message(await store_message_async(response)))
 
     mocked_post.assert_not_called()
+    assert scores[0].get_value() is False
+    assert scores[0].score_rationale == "No password found in text."
 
 
 @pytest.mark.parametrize("password", ["SUN SHINE", "sun-shine", "correct horse"])
