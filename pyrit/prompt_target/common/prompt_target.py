@@ -6,6 +6,9 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar, Literal, final
 
+from pyrit.common.async_compatibility import legacy_sync_override
+from pyrit.common.attack_result_scope import get_current_attack_result_id
+from pyrit.common.deprecation import print_deprecation_message
 from pyrit.memory import CentralMemory, MemoryInterface
 from pyrit.message_normalizer import MessageListNormalizer
 from pyrit.models import (
@@ -157,6 +160,28 @@ class PromptTarget(Identifiable):
 
         if self._verbose:
             logging.basicConfig(level=logging.INFO)
+
+    def validate_history(self, messages: Sequence[Message]) -> None:
+        """
+        Check history data types and tool payloads without sending or changing history.
+
+        This checks native input support, not normalization policy. Empty histories
+        and histories ending with an assistant message or unanswered call are permitted.
+        It does not load media or validate a future request.
+
+        Args:
+            messages: Complete ordered history to replay.
+
+        Raises:
+            ValueError: An effective data type is unsupported or tool history is invalid.
+        """
+        supported = set(self.capabilities.supported_input_modalities)
+        unsupported = {
+            piece.converted_value_data_type for message in messages for piece in message.message_pieces
+        } - supported
+        if unsupported:
+            raise ValueError(f"The target does not support these history data types: {', '.join(sorted(unsupported))}.")
+        self.validate_tool_history(messages)
 
     def validate_tool_history(self, messages: Sequence[Message]) -> None:
         """
@@ -346,7 +371,9 @@ class PromptTarget(Identifiable):
         """
         conversation_id = message.message_pieces[0].conversation_id
         persisted_messages = (
-            list(self._memory.get_conversation_messages(conversation_id=conversation_id)) if conversation_id else []
+            list(await self._memory.get_conversation_messages_async(conversation_id=conversation_id))
+            if conversation_id
+            else []
         )
         persisted_messages = filter_non_replayable_messages(messages=persisted_messages)
         conversation = send_context.select_history(messages=persisted_messages) if send_context else persisted_messages
@@ -397,13 +424,21 @@ class PromptTarget(Identifiable):
             conversation_id (str): The conversation id to attach the prompt to.
 
         Raises:
-            ValueError: If the target does not support multi-turn or editable history.
+            ValueError: If the target does not support multi-turn conversations, or
+                supports neither editable history nor native system prompts.
             RuntimeError: If the conversation already has messages.
         """
-        if not self.capabilities.supports_multi_turn or not self.capabilities.supports_editable_history:
+        print_deprecation_message(
+            old_item="PromptTarget.set_system_prompt",
+            new_item="PromptTarget.set_system_prompt_async",
+            removed_in="1.4.0",
+        )
+        if not self.capabilities.supports_multi_turn or not (
+            self.capabilities.supports_editable_history or self.capabilities.supports_system_prompt
+        ):
             raise ValueError(
                 f"Target {type(self).__name__} does not support setting a system prompt. "
-                "It must support both multi-turn conversations and editable history."
+                "It must support multi-turn conversations and either editable history or native system prompts."
             )
 
         messages = self._memory.get_conversation_messages(conversation_id=conversation_id)
@@ -412,7 +447,11 @@ class PromptTarget(Identifiable):
             raise RuntimeError("Conversation already exists, system prompt needs to be set at the beginning")
 
         self._memory.add_conversation_to_memory(
-            conversation=Conversation(conversation_id=conversation_id, target_identifier=self.get_identifier())
+            conversation=Conversation(
+                conversation_id=conversation_id,
+                target_identifier=self.get_identifier(),
+                attack_result_id=get_current_attack_result_id(),
+            )
         )
         self._memory.add_message_to_memory(
             request=MessagePiece(
@@ -421,6 +460,71 @@ class PromptTarget(Identifiable):
                 original_value=system_prompt,
                 converted_value=system_prompt,
             ).to_message(),
+        )
+
+    @legacy_sync_override(lambda: PromptTarget.set_system_prompt)
+    async def set_system_prompt_async(
+        self,
+        *,
+        system_prompt: str,
+        conversation_id: str,
+    ) -> None:
+        """
+        Inject a system prompt into memory for the given conversation.
+
+        Writes a ``system``-role message so the target's normalization pipeline
+        (or the target itself, when it natively supports system prompts) will
+        pick it up on the next ``send_prompt_async`` call.
+
+        If the target does not natively support system prompts, whether this
+        call is ultimately honored depends on the target's
+        ``CapabilityHandlingPolicy``:
+
+        * ``ADAPT`` — the normalization pipeline (e.g. system squash) will
+          fold the system message into user content on the wire.
+        * ``RAISE`` — the first send after the system prompt is set will
+          raise, because the pipeline cannot adapt the missing capability.
+
+        Args:
+            system_prompt (str): The system prompt text to set.
+            conversation_id (str): The conversation id to attach the prompt to.
+
+        Raises:
+            ValueError: If the target does not support multi-turn conversations, or
+                supports neither editable history nor native system prompts.
+            RuntimeError: If the conversation already has messages.
+        """
+        if not self.capabilities.supports_multi_turn or not (
+            self.capabilities.supports_editable_history or self.capabilities.supports_system_prompt
+        ):
+            raise ValueError(
+                f"Target {type(self).__name__} does not support setting a system prompt. "
+                "It must support multi-turn conversations and either editable history or native system prompts."
+            )
+
+        messages = await self._memory.get_conversation_messages_async(conversation_id=conversation_id)
+
+        if messages:
+            raise RuntimeError("Conversation already exists, system prompt needs to be set at the beginning")
+
+        (
+            await self._memory.add_conversation_to_memory_async(
+                conversation=Conversation(
+                    conversation_id=conversation_id,
+                    target_identifier=self.get_identifier(),
+                    attack_result_id=get_current_attack_result_id(),
+                )
+            )
+        )
+        (
+            await self._memory.add_message_to_memory_async(
+                request=MessagePiece(
+                    role="system",
+                    conversation_id=conversation_id,
+                    original_value=system_prompt,
+                    converted_value=system_prompt,
+                ).to_message()
+            )
         )
 
     async def reset_conversation_async(self, *, conversation_id: str) -> None:
@@ -445,7 +549,19 @@ class PromptTarget(Identifiable):
         """
         Dispose database engine to release database connections and resources.
         """
+        print_deprecation_message(
+            old_item="PromptTarget.dispose_db_engine",
+            new_item="PromptTarget.dispose_db_engine_async",
+            removed_in="1.4.0",
+        )
         self._memory.dispose_engine()
+
+    @legacy_sync_override(lambda: PromptTarget.dispose_db_engine)
+    async def dispose_db_engine_async(self) -> None:
+        """
+        Dispose database engine to release database connections and resources.
+        """
+        (await self._memory.dispose_engine_async())
 
     def _create_identifier(
         self,
