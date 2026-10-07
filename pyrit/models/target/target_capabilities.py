@@ -20,9 +20,9 @@ they are not modeled on the typed identifier projections in
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, cast
+from typing import cast
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_serializer
 
 from pyrit.models.literals import PromptDataType  # noqa: TC001  (runtime-required by Pydantic field annotations)
 
@@ -65,10 +65,13 @@ class TargetCapabilities(BaseModel):
     across targets and reused as a known-model profile.
 
     This model also serves as the REST wire snapshot of a target's capabilities
-    (it is embedded in ``TargetInstance``). The modality *combination* fields
-    (``input_modalities`` / ``output_modalities``) are excluded from serialization;
-    API consumers read the flattened ``supported_input_modalities`` /
-    ``supported_output_modalities`` computed fields instead.
+    (it is embedded in ``TargetInstance``), so serialization must be lossless: a
+    dumped payload validated back in has to rebuild an equal object. The immutable
+    ``frozenset[frozenset]`` combination fields are therefore serialized in a
+    deterministic form -- a sorted list of sorted lists -- which pydantic parses back
+    into the same structure. The flattened ``supported_input_modalities`` /
+    ``supported_output_modalities`` computed fields are emitted alongside them for
+    API consumers that only need per-piece modality checks.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -104,13 +107,35 @@ class TargetCapabilities(BaseModel):
     supports_streaming_audio: bool = False
 
     #: The input modalities supported by the target, as combinations of data types
-    #: (e.g., ``{{"text"}, {"image_path", "text"}}``). Excluded from serialization —
-    #: API consumers read the flattened ``supported_input_modalities`` instead.
-    input_modalities: frozenset[frozenset[PromptDataType]] = Field(default=_DEFAULT_TEXT_MODALITIES, exclude=True)
+    #: (e.g., ``{{"text"}, {"image_path", "text"}}``). Serialized as a sorted list of
+    #: sorted lists — see ``_sorted_modality_combinations``.
+    input_modalities: frozenset[frozenset[PromptDataType]] = Field(default=_DEFAULT_TEXT_MODALITIES)
 
     #: The output modalities supported by the target, as combinations of data types.
-    #: Excluded from serialization — see ``supported_output_modalities``.
-    output_modalities: frozenset[frozenset[PromptDataType]] = Field(default=_DEFAULT_TEXT_MODALITIES, exclude=True)
+    #: Serialized as a sorted list of sorted lists — see ``_sorted_modality_combinations``.
+    output_modalities: frozenset[frozenset[PromptDataType]] = Field(default=_DEFAULT_TEXT_MODALITIES)
+
+    @field_serializer("input_modalities", "output_modalities")
+    def _sorted_modality_combinations(self, combinations: frozenset[frozenset[PromptDataType]]) -> list[list[str]]:
+        """
+        Serialize the modality combinations into a deterministic wire form.
+
+        ``frozenset`` has no order, so dumping it directly would emit an
+        arbitrary permutation and make the payload unstable across processes —
+        which matters because this model is the REST snapshot embedded in
+        ``TargetInstance``, and because equal capabilities must produce equal
+        payloads. Sorting each combination's data types and then sorting the
+        combinations themselves removes that nondeterminism. Pydantic parses
+        the result back into the same ``frozenset[frozenset]`` structure, so
+        the round trip is lossless.
+
+        Args:
+            combinations: The modality combinations to serialize.
+
+        Returns:
+            list[list[str]]: The combinations as sorted lists of sorted data types.
+        """
+        return sorted(sorted(str(data_type) for data_type in combination) for combination in combinations)
 
     @computed_field(  # type: ignore[prop-decorator]
         description="Sorted unique input modality data types the target accepts (e.g., ['image_path', 'text'])",
@@ -123,6 +148,8 @@ class TargetCapabilities(BaseModel):
         The internal ``input_modalities`` models modality *combinations*
         (``frozenset[frozenset]``); API consumers use only per-piece modality
         checks, so this flattens the combinations into a sorted unique list.
+        This projection is derived, not stored — validating the wire form
+        rebuilds the combinations, and this property follows from them.
 
         Returns:
             list[str]: Sorted unique input modality data types.
@@ -141,43 +168,6 @@ class TargetCapabilities(BaseModel):
             list[str]: Sorted unique output modality data types.
         """
         return sorted({str(data_type) for combo in self.output_modalities for data_type in combo})
-
-    @model_validator(mode="before")
-    @classmethod
-    def _restore_modality_combinations_from_wire(cls, data: Any) -> Any:
-        """
-        Rebuild the excluded combination fields when validating from a serialized payload.
-
-        Serialization drops the live ``input_modalities`` / ``output_modalities`` and emits
-        their flattened ``supported_input_modalities`` / ``supported_output_modalities``
-        projections instead. A client that deserializes the wire form (e.g. the CLI
-        consuming ``GET /api/targets``) therefore holds those keys but no live combination
-        set, and would fall through to the text-only default — so an image- or audio-capable
-        target reads back as text-only, contradicting the very payload it was built from.
-
-        The wire carries the flattened union rather than the combinations, so a single
-        combination holding that union is restored. That is enough to keep the flattened
-        projection self-consistent, which is the contract the wire documents; recovering
-        the original combinations would require changing the wire format. In-process
-        construction, which already supplies a live combination set, is left untouched.
-
-        Returns:
-            Any: The input unchanged, or a copy with the combination fields restored from
-                the serialized flattened projections.
-        """
-        if not isinstance(data, dict):
-            return data
-        for combinations_key, flattened_key in (
-            ("input_modalities", "supported_input_modalities"),
-            ("output_modalities", "supported_output_modalities"),
-        ):
-            if combinations_key in data:
-                continue
-            flattened = data.get(flattened_key)
-            if isinstance(flattened, list):
-                combinations = [frozenset(flattened)] if flattened else []
-                data = {**data, combinations_key: combinations}
-        return data
 
     def includes(self, *, capability: CapabilityName) -> bool:
         """

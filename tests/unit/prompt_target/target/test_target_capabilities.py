@@ -6,6 +6,8 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
+from pyrit.models.catalog import TargetInstance
+from pyrit.models.identifiers import TargetIdentifier
 from pyrit.prompt_target.common.conversation_normalization_pipeline import NORMALIZABLE_CAPABILITIES
 from pyrit.prompt_target.common.target_capabilities import (
     CapabilityHandlingPolicy,
@@ -569,29 +571,65 @@ class TestTargetCapabilitiesWireRoundTrip:
 
     ``TargetCapabilities`` is embedded in the ``TargetInstance`` REST response, so
     ``model_dump_json()`` / ``model_validate_json()`` is a real round trip: the CLI does
-    exactly this on every ``GET /api/targets`` payload. Serialization excludes the
-    modality *combination* fields and emits their flattened ``supported_*_modalities``
-    projections instead, so reading the wire form back has to rebuild the combinations
-    from those projections -- otherwise a non-text target silently reads back as
-    text-only and the object contradicts the payload it came from.
+    exactly this on every ``GET /api/targets`` payload. Serialization emits the modality
+    *combinations* as a sorted list of sorted lists (the ``frozenset[frozenset]`` fields
+    have no order of their own), so reading the wire form back has to rebuild those
+    combinations -- otherwise a non-text target silently reads back as text-only and the
+    object contradicts the payload it came from. The flattened ``supported_*_modalities``
+    projections stay on the wire for the UI.
     """
 
-    def test_flattened_modalities_survive_the_wire_round_trip(self):
+    def test_multi_combination_profile_survives_the_wire_round_trip(self):
+        # More than one combination per field: reconstructing a single combination from
+        # the flattened projection would still be readable but would not be equal.
         caps = TargetCapabilities(
-            input_modalities=frozenset({frozenset({"text"}), frozenset({"text", "image_path"})}),
+            input_modalities=frozenset(
+                {frozenset({"text"}), frozenset({"text", "image_path"}), frozenset({"audio_path", "text", "url"})}
+            ),
             output_modalities=frozenset({frozenset({"text"}), frozenset({"audio_path", "text"})}),
         )
 
         restored = TargetCapabilities.model_validate_json(caps.model_dump_json())
 
-        assert restored.supported_input_modalities == caps.supported_input_modalities
-        assert restored.supported_output_modalities == caps.supported_output_modalities
+        assert restored == caps
+        assert restored.input_modalities == caps.input_modalities
+        assert restored.output_modalities == caps.output_modalities
+
+    def test_wire_form_carries_combinations_and_flattened_projections(self):
+        caps = TargetCapabilities(
+            input_modalities=frozenset({frozenset({"text"}), frozenset({"image_path", "text"})}),
+        )
+
+        payload = caps.model_dump(mode="json")
+
+        # Combinations, sorted within and across, so equal capabilities serialize equally.
+        assert payload["input_modalities"] == [["image_path", "text"], ["text"]]
+        # The flattened projection the UI reads stays on the wire.
+        assert payload["supported_input_modalities"] == ["image_path", "text"]
+        assert payload["supported_output_modalities"] == ["text"]
+
+    def test_serialized_ordering_is_stable_across_equivalent_objects(self):
+        # frozenset iteration order varies with the strings' hashes, so two objects built
+        # from differently-ordered inputs must still serialize identically.
+        first = TargetCapabilities(
+            input_modalities=frozenset(
+                {frozenset({"url"}), frozenset({"audio_path", "text", "url"}), frozenset({"text"})}
+            )
+        )
+        second = TargetCapabilities(
+            input_modalities=frozenset(
+                {frozenset({"text"}), frozenset({"audio_path", "text", "url"}), frozenset({"url"})}
+            )
+        )
+
+        assert first.model_dump_json() == second.model_dump_json()
 
     def test_non_text_output_target_does_not_read_back_as_text_only(self):
         caps = TargetCapabilities(output_modalities=frozenset({frozenset({"image_path"})}))
 
         restored = TargetCapabilities.model_validate_json(caps.model_dump_json())
 
+        assert restored == caps
         assert restored.output_modalities == caps.output_modalities
         assert restored.supported_output_modalities == ["image_path"]
 
@@ -600,6 +638,7 @@ class TestTargetCapabilitiesWireRoundTrip:
 
         restored = TargetCapabilities.model_validate_json(caps.model_dump_json())
 
+        assert restored == caps
         assert restored.input_modalities == caps.input_modalities
         assert restored.supported_input_modalities == ["audio_path"]
 
@@ -609,6 +648,7 @@ class TestTargetCapabilitiesWireRoundTrip:
 
         restored = TargetCapabilities.model_validate_json(caps.model_dump_json())
 
+        assert restored == caps
         assert restored.supported_input_modalities == caps.supported_input_modalities
         assert restored.supported_output_modalities == caps.supported_output_modalities
         for field in ("supports_multi_turn", "supports_system_prompt", "supports_json_output"):
@@ -622,6 +662,7 @@ class TestTargetCapabilitiesWireRoundTrip:
 
         restored = TargetCapabilities.model_validate_json(caps.model_dump_json())
 
+        assert restored == caps
         assert restored.includes(capability=CapabilityName.MULTI_TURN) is True
         assert "audio_path" in restored.supported_output_modalities
 
@@ -630,6 +671,7 @@ class TestTargetCapabilitiesWireRoundTrip:
 
         restored = TargetCapabilities.model_validate_json(caps.model_dump_json())
 
+        assert restored == caps
         assert restored.supported_input_modalities == []
         assert restored.input_modalities == frozenset()
 
@@ -640,15 +682,51 @@ class TestTargetCapabilitiesWireRoundTrip:
 
         assert restored == caps
 
-    def test_in_process_construction_is_not_reinterpreted(self):
-        # Supplying the live combination fields must win over any flattened projection.
-        caps = TargetCapabilities(
-            input_modalities=frozenset({frozenset({"image_path"})}),
-            supported_input_modalities=["text"],
+    def test_flattened_projection_in_the_payload_is_not_read_back_as_state(self):
+        # ``supported_*_modalities`` is a derived projection, so a payload carrying a stale
+        # one must not be able to override the combinations it is derived from.
+        caps = TargetCapabilities.model_validate(
+            {
+                "input_modalities": [["image_path"]],
+                "supported_input_modalities": ["text"],
+            }
         )
 
         assert caps.input_modalities == frozenset({frozenset({"image_path"})})
         assert caps.supported_input_modalities == ["image_path"]
+
+    def test_nested_target_instance_round_trip_preserves_capabilities(self):
+        # ``TargetInstance`` is what the REST layer actually serves and what the CLI
+        # validates, so the capabilities have to survive that nesting -- including the
+        # inner targets of a composite target.
+        inner = TargetInstance(
+            target_registry_name="openai_chat",
+            identifier=TargetIdentifier(class_name="OpenAIChatTarget", class_module="pyrit.prompt_target.openai"),
+            capabilities=TargetCapabilities(
+                input_modalities=frozenset({frozenset({"text"}), frozenset({"image_path", "text"})}),
+                output_modalities=frozenset({frozenset({"text"})}),
+            ),
+        )
+        composite = TargetInstance(
+            target_registry_name="round_robin",
+            identifier=TargetIdentifier(class_name="RoundRobinTarget", class_module="pyrit.prompt_target.round_robin"),
+            capabilities=TargetCapabilities(
+                supports_multi_turn=True,
+                input_modalities=frozenset({frozenset({"audio_path", "text"})}),
+                output_modalities=frozenset({frozenset({"audio_path"}), frozenset({"text"})}),
+            ),
+            inner_targets=[inner],
+        )
+
+        restored = TargetInstance.model_validate_json(composite.model_dump_json())
+
+        assert restored == composite
+        assert restored.capabilities.input_modalities == composite.capabilities.input_modalities
+        assert restored.capabilities.output_modalities == composite.capabilities.output_modalities
+        assert restored.capabilities.supported_input_modalities == ["audio_path", "text"]
+        assert restored.inner_targets is not None
+        assert restored.inner_targets[0] == inner
+        assert restored.inner_targets[0].capabilities.input_modalities == inner.capabilities.input_modalities
 
     def test_non_mapping_payload_is_left_to_pydantic(self):
         with pytest.raises(ValidationError):
