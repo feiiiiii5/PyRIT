@@ -550,10 +550,11 @@ class OpenAIResponseTarget(OpenAITarget):
         """
         Construct a Message from a Response API response.
 
-        For a truncated response (see ``_is_truncated_response``), empty output sections are
-        tolerated, partial tool/function calls are skipped so an incomplete call cannot re-enter the
-        agentic loop, and a graceful empty text piece is appended when no visible response was
-        produced. Reasoning, any partial text, and structured refusals are always preserved.
+        Empty output sections are tolerated on a truncated response (see
+        ``_is_truncated_response``), where partial tool/function calls are also skipped so an
+        incomplete call cannot re-enter the agentic loop. Whenever no visible response was
+        produced — truncated or completed — a graceful empty text piece is appended. Reasoning,
+        any partial text, and structured refusals are always preserved.
 
         Args:
             response: The Response object from OpenAI SDK.
