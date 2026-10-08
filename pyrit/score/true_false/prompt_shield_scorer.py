@@ -83,18 +83,18 @@ class PromptShieldScorer(MessageTrueFalseScorer):
         # Whether or not any of the documents or userPrompt got flagged as an attack
         result: bool = any(self._parse_response_to_boolean_list(response))
 
-        # Store parsed response in metadata for structured access
-        try:
-            meta = json.loads(response)
-        except Exception:
-            meta = {"raw": response}
+        # Store the endpoint response in metadata for structured access. Score only
+        # accepts flat str/int/float metadata values, so the body is kept as the JSON
+        # text it arrived as; json.loads on it, as _parse_response_to_boolean_list's
+        # docstring says.
+        meta = {"response": response}
 
         score = Score(
             score_type="true_false",
             score_value=str(result),
             score_value_description="True if an attack or jailbreak has been detected, else False.",
             score_category=["attack_detection"],
-            score_metadata=meta,  # type: ignore[ty:invalid-argument-type]
+            score_metadata=meta,
             score_rationale="",
             scorer_class_identifier=self.get_identifier(),
             message_piece_id=message_piece.id,
