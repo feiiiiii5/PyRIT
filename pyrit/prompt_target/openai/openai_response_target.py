@@ -596,7 +596,6 @@ class OpenAIResponseTarget(OpenAITarget):
         if not has_visible_response:
             # Append a graceful empty marker piece and keep any reasoning pieces when a
             # response with no readable section is found
-            # piece instead and keep any reasoning pieces; nothing raises, so nothing retries.
             if not truncated:
                 logger.warning(
                     "Responses output for conversation %s completed with no readable section; "
