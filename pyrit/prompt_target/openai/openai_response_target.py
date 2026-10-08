@@ -594,9 +594,8 @@ class OpenAIResponseTarget(OpenAITarget):
                 has_visible_response = True
 
         if not has_visible_response:
-            # A response with no readable section is not an exception: EmptyResponseException
-            # would be retried by @pyrit_target_retry even though the outcome is deterministic,
-            # and raising would skip metadata capture below. Append a graceful empty marker
+            # Append a graceful empty marker piece and keep any reasoning pieces when a
+            # response with no readable section is found
             # piece instead and keep any reasoning pieces; nothing raises, so nothing retries.
             if not truncated:
                 logger.warning(
