@@ -1738,6 +1738,30 @@ async def test_construct_message_completed_keeps_readable_output_next_to_unreada
     assert [p.original_value for p in text_pieces] == ["An answer"]
 
 
+async def test_construct_message_completed_without_readable_output_warns(
+    target: OpenAIResponseTarget, dummy_text_message_piece: MessagePiece, caplog: pytest.LogCaptureFixture
+):
+    """A completed response degrades silently, so the warning is the operator's only signal."""
+    response = _make_completed_response(output=[_make_reasoning_section()])
+
+    with caplog.at_level(logging.WARNING):
+        await target._construct_message_from_response_async(response, dummy_text_message_piece)
+
+    assert "completed with no readable section" in caplog.text
+
+
+async def test_construct_message_truncated_without_readable_output_does_not_warn(
+    target: OpenAIResponseTarget, dummy_text_message_piece: MessagePiece, caplog: pytest.LogCaptureFixture
+):
+    """Hitting the token cap is an expected outcome, so the same fallback stays quiet."""
+    response = _make_truncated_response(output=[_make_reasoning_section()])
+
+    with caplog.at_level(logging.WARNING):
+        await target._construct_message_from_response_async(response, dummy_text_message_piece)
+
+    assert "no readable section" not in caplog.text
+
+
 async def test_construct_message_from_response(target: OpenAIResponseTarget, dummy_text_message_piece: MessagePiece):
     """Test _construct_message_from_response parses output sections."""
     mock_response = MagicMock()
