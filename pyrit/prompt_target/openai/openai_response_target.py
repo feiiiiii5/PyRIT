@@ -597,6 +597,13 @@ class OpenAIResponseTarget(OpenAITarget):
             # would be retried by @pyrit_target_retry even though the outcome is deterministic,
             # and raising would skip metadata capture below. Append a graceful empty marker
             # piece instead and keep any reasoning pieces; nothing raises, so nothing retries.
+            if not truncated:
+                logger.warning(
+                    "Responses output for conversation %s completed with no readable section; "
+                    "returning an empty response marker. Reasoning-only output or a section type "
+                    "PyRIT does not model can cause this.",
+                    request.conversation_id,
+                )
             empty_piece = build_empty_truncated_response(request=request).message_pieces[0]
             extracted_response_pieces.append(empty_piece)
 
