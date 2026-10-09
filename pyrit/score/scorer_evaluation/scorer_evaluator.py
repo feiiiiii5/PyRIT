@@ -750,7 +750,7 @@ class HarmScorerEvaluator(ScorerEvaluator):
 
 class ObjectiveScorerEvaluator(ScorerEvaluator):
     """
-    A class that evaluates an objective scorer against HumanLabeledDatasets of type OBJECTIVE.
+    Evaluate an objective scorer against single-assistant-response OBJECTIVE datasets.
     """
 
     expected_metrics_type = MetricsType.OBJECTIVE
@@ -760,7 +760,11 @@ class ObjectiveScorerEvaluator(ScorerEvaluator):
         labeled_dataset: HumanLabeledDataset,
     ) -> tuple[list[Message], list[list[float]], list[str] | None]:
         """
-        Validate objective dataset and extract evaluation data.
+        Validate the dataset and select one assistant scoring anchor per entry.
+
+        All conversation messages are stored for context, but each entry must contain
+        exactly one assistant message. Each entry contributes one response, one set of
+        human scores, and one objective to the evaluation.
 
         Args:
             labeled_dataset: The dataset to validate and extract from.
@@ -769,7 +773,8 @@ class ObjectiveScorerEvaluator(ScorerEvaluator):
             Tuple of (assistant_responses, human_scores_list, objectives).
 
         Raises:
-            ValueError: If dataset is not OBJECTIVE type or contains invalid entries.
+            ValueError: If the dataset is not OBJECTIVE type or an entry does not
+                contain exactly one assistant message.
         """
         if labeled_dataset.metrics_type != MetricsType.OBJECTIVE:
             raise ValueError("The HumanLabeledDataset must be of type OBJECTIVE to evaluate an objective scorer.")
