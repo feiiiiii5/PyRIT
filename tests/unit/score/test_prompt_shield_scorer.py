@@ -80,5 +80,9 @@ async def test_prompt_shield_scorer_metadata_is_the_response_text(sqlite_instanc
     assert len(scores) == 1
     # the sample body flags the document, not the user prompt
     assert scores[0].get_value() is True
-    assert scores[0].score_metadata == {"response": sample_response_json_str}
-    assert json.loads(scores[0].score_metadata["response"]) == json.loads(sample_response_json_str)
+    assert scores[0].score_metadata == {"raw": sample_response_json_str}
+    assert json.loads(scores[0].score_metadata["raw"]) == json.loads(sample_response_json_str)
+
+    persisted_scores = await sqlite_instance.get_scores_async(score_ids=[str(scores[0].id)])
+    assert len(persisted_scores) == 1
+    assert persisted_scores[0].score_metadata == {"raw": sample_response_json_str}

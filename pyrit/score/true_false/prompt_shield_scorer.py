@@ -83,11 +83,8 @@ class PromptShieldScorer(MessageTrueFalseScorer):
         # Whether or not any of the documents or userPrompt got flagged as an attack
         result: bool = any(self._parse_response_to_boolean_list(response))
 
-        # Store the endpoint response in metadata for structured access. Score only
-        # accepts flat str/int/float metadata values, so the body is kept as the JSON
-        # text it arrived as; json.loads on it, as _parse_response_to_boolean_list's
-        # docstring says.
-        meta = {"response": response}
+        # Score metadata only accepts flat primitive values, so keep the raw response as JSON text.
+        meta = {"raw": response}
 
         score = Score(
             score_type="true_false",
@@ -105,8 +102,9 @@ class PromptShieldScorer(MessageTrueFalseScorer):
 
     def _parse_response_to_boolean_list(self, response: str) -> list[bool]:
         """
-        Remember that you can just access the metadata attribute to get the original Prompt Shield endpoint response,
-        and then just call json.loads() on it to interact with it.
+        Parse the Prompt Shield endpoint response into detection flags.
+
+        The original response is stored as JSON text in ``score_metadata["raw"]``.
 
         Returns:
             list[bool]: A list of boolean values indicating whether an attack was detected.
