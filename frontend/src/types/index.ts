@@ -131,7 +131,7 @@ export interface MessageMediaDisplayPiece {
 export type MessageDisplayPiece = MessageTextDisplayPiece | MessageMediaDisplayPiece
 
 export interface Message {
-  role: 'user' | 'assistant' | 'simulated_assistant' | 'system'
+  role: 'user' | 'assistant' | 'simulated_assistant' | 'tool' | 'simulated_tool' | 'system'
   content: string
   timestamp: string
   /**
@@ -167,6 +167,12 @@ export interface ChatSendOutcome {
   clearDraft: boolean
 }
 
+/** A filter choice: the value it selects and the text shown for it. */
+export interface FilterOption {
+  value: string
+  label: string
+}
+
 // ============================================================================
 // Backend DTO Types (mirror pyrit/backend/models)
 // ============================================================================
@@ -182,6 +188,7 @@ export interface ConfigurationFileContent {
   content: string
   source: string
   version: string
+  live_reinitialization_enabled: boolean
 }
 
 export interface UpdateConfigurationFileRequest {
@@ -1130,4 +1137,19 @@ export interface ScenarioRunProgress {
   next_cursor?: string | null
   has_more: boolean
   plan_complete: boolean
+}
+export interface RuntimeReadiness {
+  ready: boolean
+  state: string
+  generation: string
+}
+
+export interface RuntimeStatus {
+  state: string
+  generation: string
+  version: string | null
+  enabled: boolean
+  applying: boolean
+  outcome: string
+  message: string
 }
