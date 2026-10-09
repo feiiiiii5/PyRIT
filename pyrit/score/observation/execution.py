@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, TypeAlias
 from pyrit.models import (
     ContentEntryScorable,
     ContentScorable,
+    ConversationObservationPayload,
     Message,
     MessagePiece,
     MessageScorable,
@@ -32,42 +33,10 @@ class NonReplayableObservationError(ValueError):
 
 if TYPE_CHECKING:
     import uuid
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Generator, Sequence
 
 
-_ObservationEvidence: TypeAlias = Message | ToolEventsObservationPayload
-
-
-def _scored_evidence_digest(
-    *,
-    scorable: ScorableUnion,
-    scored_piece_id: uuid.UUID,
-    memory: MemoryInterface,
-    scored_message_piece: MessagePiece | None = None,
-) -> str | None:
-    """
-    Resolve and hash the canonical input evidence used for one judgment.
-
-    Returns:
-        str | None: The digest, or None when media replay is deferred.
-
-    Raises:
-        NonReplayableObservationError: If the scored evidence cannot be resolved.
-    """
-    if isinstance(scorable, MessageScorable) and scored_message_piece is None:
-        pieces = memory.get_message_pieces(prompt_ids=[scored_piece_id])
-        scored_message_piece = next((piece for piece in pieces if piece.id == scored_piece_id), None)
-    content_id = scorable.content_id if isinstance(scorable, ContentEntryScorable) else None
-    stored_content = _load_content_evidence(memory=memory, content_id=content_id)
-    try:
-        return _resolved_scored_evidence_digest(
-            scorable=scorable,
-            scored_piece_id=scored_piece_id,
-            scored_piece=scored_message_piece,
-            stored_content=stored_content,
-        )
-    except ValueError as error:
-        raise NonReplayableObservationError(str(error)) from error
+_ObservationEvidence: TypeAlias = Message | ToolEventsObservationPayload | tuple[MessagePiece, ...]
 
 
 async def _scored_evidence_digest_async(
@@ -100,22 +69,6 @@ async def _scored_evidence_digest_async(
         )
     except ValueError as error:
         raise NonReplayableObservationError(str(error)) from error
-
-
-def _load_content_evidence(
-    *, memory: MemoryInterface, content_id: uuid.UUID | None
-) -> tuple[ContentScorable, str] | None:
-    """
-    Load stored content and its hash.
-
-    Returns:
-        tuple[ContentScorable, str] | None: The evidence, or None if unreferenced or missing.
-    """
-    if content_id is None:
-        return None
-    content = memory.get_scorable_content(content_ids=[content_id]).get(content_id)
-    digest = memory.get_scorable_content_hashes(content_ids=[content_id]).get(content_id)
-    return (content, digest) if content is not None and digest is not None else None
 
 
 async def _load_content_evidence_async(
@@ -202,7 +155,7 @@ _CURRENT_SCORING_MESSAGE: ContextVar[Message | None] = ContextVar(
 
 
 @contextmanager
-def _scoring_collection() -> Iterator[_ScoringCollector]:
+def _scoring_collection() -> Generator[_ScoringCollector, None, None]:
     """
     Collect observations and intermediate results for one public scoring call.
 
@@ -250,7 +203,7 @@ def _has_observation_collection() -> bool:
 
 
 @contextmanager
-def _suppress_observation_collection() -> Iterator[None]:
+def _suppress_observation_collection() -> Generator[None, None, None]:
     """Temporarily disable observation capture for derived evidence that cannot replay."""
     token = _CURRENT_OBSERVATION_COLLECTOR.set(None)
     try:
@@ -262,7 +215,7 @@ def _suppress_observation_collection() -> Iterator[None]:
 @contextmanager
 def _scoring_expectation_context(
     expectation: ScoringExpectation | None,
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     """Make the effective expectation available to request-bound scoring helpers."""
     token = _CURRENT_SCORING_EXPECTATION.set(expectation)
     try:
@@ -282,7 +235,7 @@ def _get_current_scoring_expectation() -> ScoringExpectation | None:
 
 
 @contextmanager
-def _scoring_scorable_context(scorable: Scorable | None) -> Iterator[None]:
+def _scoring_scorable_context(scorable: Scorable | None) -> Generator[None, None, None]:
     """Make the active scorable available to request-bound scoring helpers."""
     token = _CURRENT_SCORABLE.set(scorable)
     try:
@@ -302,7 +255,7 @@ def _get_current_scorable() -> Scorable | None:
 
 
 @contextmanager
-def _scoring_message_context(message: Message) -> Iterator[None]:
+def _scoring_message_context(message: Message) -> Generator[None, None, None]:
     """Make the exact prepared message available to request-bound scoring helpers."""
     token = _CURRENT_SCORING_MESSAGE.set(message)
     try:
@@ -373,4 +326,6 @@ class _ObservationEvidenceResolver:
             )
         except ValueError as error:
             raise NonReplayableObservationError(str(error)) from error
+        if isinstance(payload, ConversationObservationPayload):
+            return tuple(pieces_by_id[piece_id] for piece_id in payload.message_piece_ids)
         return Message(message_pieces=[pieces_by_id[piece_id] for piece_id in observation.response_message_piece_ids])

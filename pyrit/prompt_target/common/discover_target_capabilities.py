@@ -42,10 +42,11 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
+from pyrit.common.attack_result_scope import get_current_attack_result_id
 from pyrit.common.path import DATASETS_PATH
 from pyrit.models import (
     JSON_SCHEMA_METADATA_KEY,
@@ -124,7 +125,7 @@ def _permissive_configuration(
     *,
     target: PromptTarget,
     extra_input_modalities: Iterable[frozenset[PromptDataType]] | None = None,
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     """
     Temporarily replace ``target``'s configuration with one that declares every
     boolean capability as natively supported.
@@ -176,7 +177,7 @@ def _permissive_configuration(
 
 
 @contextmanager
-def _disable_probe_tools(*, target: PromptTarget) -> Iterator[None]:
+def _disable_probe_tools(*, target: PromptTarget) -> Generator[None, None, None]:
     """Disable configured tools during probes and restore all settings on exit."""
     from pyrit.prompt_target.litellm_chat_target import LiteLLMChatTarget
     from pyrit.prompt_target.openai.openai_chat_target import OpenAIChatTarget
@@ -364,7 +365,11 @@ async def _probe_system_prompt_async(target: PromptTarget, timeout_s: float, ret
     try:
         (
             await target._memory.add_conversation_to_memory_async(
-                conversation=Conversation(conversation_id=conversation_id, target_identifier=target.get_identifier())
+                conversation=Conversation(
+                    conversation_id=conversation_id,
+                    target_identifier=target.get_identifier(),
+                    attack_result_id=get_current_attack_result_id(),
+                )
             )
         )
         (await target._memory.add_message_to_memory_async(request=Message(message_pieces=[system_piece])))
@@ -453,7 +458,11 @@ async def _probe_multi_turn_async(target: PromptTarget, timeout_s: float, retrie
     try:
         (
             await target._memory.add_conversation_to_memory_async(
-                conversation=Conversation(conversation_id=conversation_id, target_identifier=target.get_identifier())
+                conversation=Conversation(
+                    conversation_id=conversation_id,
+                    target_identifier=target.get_identifier(),
+                    attack_result_id=get_current_attack_result_id(),
+                )
             )
         )
         (await target._memory.add_message_to_memory_async(request=Message(message_pieces=[first])))
@@ -603,7 +612,11 @@ async def _probe_tool_calls_async(
             ),
         )
     await target._memory.add_conversation_to_memory_async(
-        conversation=Conversation(conversation_id=conversation_id, target_identifier=target.get_identifier()),
+        conversation=Conversation(
+            conversation_id=conversation_id,
+            target_identifier=target.get_identifier(),
+            attack_result_id=get_current_attack_result_id(),
+        ),
     )
     for message in history:
         message.set_simulated_role()

@@ -46,6 +46,9 @@ class TestDecodingScorer:
             assert score[0].get_value() is True
             assert score[0].score_type == "true_false"
             assert score[0].score_category == ["decoding"]
+            assert score[0].score_metadata == {
+                "text_matcher": "<class 'pyrit.analytics.text_matching.ExactTextMatching'>"
+            }
 
     async def test_decoding_scorer_converted_value_match(self, patch_central_database, sample_message_pieces):
         user_piece, assistant_piece = sample_message_pieces
@@ -107,12 +110,13 @@ class TestDecodingScorer:
 
         memory = MagicMock(MemoryInterface)
         user_message = Message(message_pieces=[user_piece])
-        memory.get_request_from_response.return_value = user_message
+        memory.get_request_from_response_async.return_value = user_message
 
         with patch.object(CentralMemory, "get_memory_instance", return_value=memory):
             scorer = DecodingScorer(categories=["decoding"])
             score = await scorer._score_piece_async(assistant_piece)
 
+            memory.get_request_from_response_async.assert_awaited_once()
             assert len(score) == 1
             assert score[0].get_value() is False
 
