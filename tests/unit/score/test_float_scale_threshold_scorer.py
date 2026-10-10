@@ -310,7 +310,7 @@ async def test_float_scale_threshold_scorer_rejects_aggregator_that_does_not_com
     # The message has to name the aggregator that cannot be thresholded, so the caller
     # knows to pick a combining one instead of guessing why no score came back.
     assert "FloatScaleScorerByCategory.MAX cannot be thresholded" in str(exc_info.value)
-    memory.add_scores_to_memory.assert_not_called()
+    memory.add_scores_to_memory_async.assert_not_called()
 
 
 async def test_float_scale_threshold_scorer_rejects_aggregator_that_returns_nothing():
@@ -334,7 +334,7 @@ async def test_float_scale_threshold_scorer_rejects_aggregator_that_returns_noth
         with pytest.raises(RuntimeError, match="empty_aggregator returned 0 results"):
             await threshold_scorer.score_text_async(text="mock example")
 
-    memory.add_scores_to_memory.assert_not_called()
+    memory.add_scores_to_memory_async.assert_not_called()
 
 
 async def test_float_scale_threshold_scorer_single_score_attribution_unchanged():
