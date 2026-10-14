@@ -10,7 +10,9 @@ import os
 import tempfile
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import urlencode
 
 import pytest
 from fastapi import Request, status
@@ -28,7 +30,14 @@ from pyrit.backend.models.attacks import (
     MessageView,
     TargetResponseStatus,
 )
-from pyrit.backend.models.common import PaginationInfo
+from pyrit.backend.models.common import (
+    MAX_CURSOR_LENGTH,
+    MAX_IDENTIFIER_LENGTH,
+    MAX_ITEMS,
+    MAX_LABEL_KEY_LENGTH,
+    MAX_LABEL_VALUE_LENGTH,
+    PaginationInfo,
+)
 from pyrit.backend.models.converters import (
     ConverterInstance,
     ConverterInstanceListResponse,
@@ -41,8 +50,9 @@ from pyrit.backend.models.targets import (
     TargetTypeResponse,
 )
 from pyrit.backend.routes import version as version_routes
+from pyrit.backend.routes.common import parse_label_query_params
 from pyrit.backend.routes.scores import _get_user_identifier
-from pyrit.backend.services.attack_service import AttackObjectiveConflictError
+from pyrit.backend.services.attack_service import AttackObjectiveConflictError, AttackService
 from pyrit.backend.services.manual_send_scheduler import ManualSendConflictError, ManualSendQueueFullError
 from pyrit.memory import MemoryInterface
 from pyrit.models import AttackOutcome, ConverterIdentifier, MessagePiece, Score, TargetCapabilities, TargetIdentifier
@@ -255,6 +265,41 @@ class TestAttackRoutes:
             )
 
             assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    @pytest.mark.parametrize("reference", [False, True])
+    @pytest.mark.parametrize("field", ["original_value", "converted_value"])
+    def test_create_attack_rejected_media_returns_400(
+        self, *, client: TestClient, managed_media_path: Path, tmp_path: Path, reference: bool, field: str
+    ) -> None:
+        outside = tmp_path / "outside.png"
+        outside.write_bytes(b"image")
+        value = f"/api/media?{urlencode({'path': str(outside)})}" if reference else str(outside)
+        service = AttackService()
+        with (
+            patch("pyrit.backend.routes.attacks.get_attack_service", return_value=service),
+            patch.object(service._memory, "add_conversation_branches_to_attack_async", new_callable=AsyncMock) as store,
+        ):
+            response = client.post(
+                "/api/attacks",
+                json={
+                    "prepended_conversation": [
+                        {
+                            "role": "user",
+                            "pieces": [
+                                {
+                                    "data_type": "image_path",
+                                    "original_value": value if field == "original_value" else str(managed_media_path),
+                                    "converted_value": value if field == "converted_value" else str(managed_media_path),
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "outside the allowed results directory" in response.json()["detail"]
+        store.assert_not_awaited()
 
     def test_get_attack_success(self, client: TestClient) -> None:
         """Test getting an attack by ID."""
@@ -789,27 +834,34 @@ class TestAttackRoutes:
             data = response.json()
             assert data["converter_types"] == ["Base64Converter", "ROT13Converter"]
 
-    def test_parse_labels_skips_param_without_colon(self, client: TestClient) -> None:
-        """Test that _parse_labels skips label params that have no colon."""
+    def test_list_attacks_rejects_label_without_colon(self, client: TestClient) -> None:
+        """Test that a label filter without a key:value separator is rejected."""
         with patch("pyrit.backend.routes.attacks.get_attack_service") as mock_get_service:
             mock_service = MagicMock()
-            mock_service.list_attacks_async = AsyncMock(
-                return_value=AttackListResponse(
-                    items=[],
-                    pagination=PaginationInfo(limit=20, has_more=False, next_cursor=None, prev_cursor=None),
-                )
-            )
+            mock_service.list_attacks_async = AsyncMock()
             mock_get_service.return_value = mock_service
 
             response = client.get("/api/attacks?label=nocolon&label=env:prod")
 
-            assert response.status_code == status.HTTP_200_OK
-            call_kwargs = mock_service.list_attacks_async.call_args[1]
-            # Only the valid label should be parsed
-            assert call_kwargs["labels"] == {"env": ["prod"]}
+            assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+            assert "key:value" in response.json()["errors"][0]["message"]
+            mock_service.list_attacks_async.assert_not_called()
 
-    def test_parse_labels_all_invalid_returns_none(self, client: TestClient) -> None:
-        """Test that _parse_labels returns None when all params lack colons."""
+    @pytest.mark.parametrize("route", ["/api/attacks", "/api/labels", "/api/scenarios/runs"])
+    @pytest.mark.parametrize(
+        "label",
+        ["k" * (MAX_LABEL_KEY_LENGTH + 1) + ":v", "k:" + "v" * (MAX_LABEL_VALUE_LENGTH + 1)],
+        ids=["key", "value"],
+    )
+    def test_label_filter_part_over_limit_is_rejected(self, client: TestClient, route: str, label: str) -> None:
+        """Test that label filter keys and values each stay within the label limits."""
+        response = client.get(route, params={"label": label})
+
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+    def test_label_filter_at_limits_is_accepted(self, client: TestClient) -> None:
+        """Test that padded label filters at the key and value limits are parsed."""
+        key, value = "k" * MAX_LABEL_KEY_LENGTH, "v" * MAX_LABEL_VALUE_LENGTH
         with patch("pyrit.backend.routes.attacks.get_attack_service") as mock_get_service:
             mock_service = MagicMock()
             mock_service.list_attacks_async = AsyncMock(
@@ -820,11 +872,40 @@ class TestAttackRoutes:
             )
             mock_get_service.return_value = mock_service
 
-            response = client.get("/api/attacks?label=nocolon&label=alsonocolon")
+            response = client.get("/api/attacks", params={"label": f"  {key}  :  {value}  "})
 
             assert response.status_code == status.HTTP_200_OK
-            call_kwargs = mock_service.list_attacks_async.call_args[1]
-            assert call_kwargs["labels"] is None
+            assert mock_service.list_attacks_async.call_args[1]["labels"] == {key: [value]}
+
+    def test_parse_label_query_params_rejects_missing_separator(self) -> None:
+        """Test that the shared label parser never drops a malformed filter."""
+        with pytest.raises(ValueError, match="key:value"):
+            parse_label_query_params(["env:prod", "nocolon"])
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "label=" + "&label=".join(f"k{i}:v" for i in range(MAX_ITEMS + 1)),
+            "cursor=" + "c" * (MAX_CURSOR_LENGTH + 1),
+            "attack_types=" + "a" * (MAX_IDENTIFIER_LENGTH + 1),
+            "min_turns=100000000000000000000",
+        ],
+    )
+    def test_list_attacks_rejects_oversized_query_values(self, client: TestClient, query: str) -> None:
+        """Test that oversized filter values are rejected before the service runs."""
+        with patch("pyrit.backend.routes.attacks.get_attack_service") as mock_get_service:
+            response = client.get(f"/api/attacks?{query}")
+
+            assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+            mock_get_service.assert_not_called()
+
+    def test_get_attack_rejects_oversized_id(self, client: TestClient) -> None:
+        """Test that an oversized path identifier is rejected before the service runs."""
+        with patch("pyrit.backend.routes.attacks.get_attack_service") as mock_get_service:
+            response = client.get(f"/api/attacks/{'a' * (MAX_IDENTIFIER_LENGTH + 1)}")
+
+            assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+            mock_get_service.assert_not_called()
 
     def test_parse_labels_value_with_extra_colons(self, client: TestClient) -> None:
         """Test that _parse_labels handles values containing colons (split on first only)."""

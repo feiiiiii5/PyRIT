@@ -23,11 +23,7 @@ import {
 } from '@fluentui/react-components'
 import {
   ArrowDownloadRegular,
-  ArrowForwardRegular,
   ArrowReplyRegular,
-  BranchForkRegular,
-  ChatAddRegular,
-  EditRegular,
   MoreHorizontalRegular,
   OpenRegular,
 } from '@fluentui/react-icons'
@@ -41,38 +37,18 @@ import type {
 } from '../../types'
 import { useMessageListStyles } from './MessageList.styles'
 
-interface ProcessingErrorRecovery {
-  messageIndex: number
-  actionLabel: string
-  description: string
-  disabled?: boolean
-  onRecover: () => void | Promise<void>
-}
-
 interface MessageListProps {
   messages: Message[]
   /** Copy this message to the input box of the current conversation */
   onCopyToInput?: (messageIndex: number) => void
-  /** Copy this message to the input box of a brand-new conversation (same attack) */
   onCopyToNewConversation?: (messageIndex: number) => void
-  /** Branch conversation up to this point into a new conversation (same attack) */
-  onBranchConversation?: (messageIndex: number) => void
-  /** Branch conversation up to this point into a new attack */
-  onBranchAttack?: (messageIndex: number) => void
+  onCopyToNewAttack?: (messageIndex: number) => void
+  copyConversationDisabled?: boolean
+  newConversationDisabledReason?: string
   /** True while loading a historical attack's messages */
   isLoading?: boolean
-  /** True when the target is single-turn (disables copy-to-input) */
-  isSingleTurn?: boolean
-  /** True when the current operator doesn't own this attack (disables same-attack actions) */
-  isOperatorLocked?: boolean
-  /** True when the historical conversation uses a different target (disables current-conv actions) */
-  isCrossTarget?: boolean
-  /** True when no target is currently selected */
-  noTargetSelected?: boolean
   /** Conversation-wide default: render message text as Markdown. */
   globalMarkdown?: boolean
-  /** Recovery action for the processing error caused by the most recent send. */
-  processingErrorRecovery?: ProcessingErrorRecovery
 }
 
 /** Image that shows a spinner while loading. */
@@ -565,7 +541,10 @@ function getRenderMessagePieces(message: Message, messageIndex: number): RenderM
   return pieces
 }
 
-export default function MessageList({ messages, onCopyToInput, onCopyToNewConversation, onBranchConversation, onBranchAttack, isLoading, isSingleTurn, isOperatorLocked, isCrossTarget, noTargetSelected, globalMarkdown = false, processingErrorRecovery }: MessageListProps) {
+export default function MessageList({
+  messages, onCopyToInput, onCopyToNewConversation, onCopyToNewAttack, copyConversationDisabled = false,
+  newConversationDisabledReason, isLoading, globalMarkdown = false,
+}: MessageListProps) {
   const styles = useMessageListStyles()
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -614,14 +593,13 @@ export default function MessageList({ messages, onCopyToInput, onCopyToNewConver
   return (
     <div className={styles.root} data-testid="message-list">
       {messages.map((message, index) => {
-        if (message.role === 'system') return null
         const isUser = message.role === 'user'
         const isSimulated = message.role === 'simulated_assistant' || message.role === 'simulated_tool'
         const timestamp = new Date(message.timestamp).toLocaleTimeString()
         const avatarName = message.role === 'simulated_tool' ? 'Simulated Tool'
-          : message.role === 'tool' ? 'Tool' : isUser ? 'User' : isSimulated ? 'Simulated' : 'Assistant'
-        const canRecoverProcessingError = message.error?.type === 'processing'
-          && processingErrorRecovery?.messageIndex === index
+          : isUser ? 'User' : isSimulated ? 'Simulated'
+          : message.role === 'system' ? 'System' : message.role === 'tool' ? 'Tool'
+            : message.role === 'developer' ? 'Developer' : 'Assistant'
         const renderPieces = getRenderMessagePieces(message, index)
 
         return (
@@ -644,25 +622,7 @@ export default function MessageList({ messages, onCopyToInput, onCopyToNewConver
                     <MessageBarBody>
                       <Text weight="semibold">{message.error.type}</Text>
                       {message.error.description && (
-                        <Text>: {message.error.description}</Text>
-                      )}
-                      {canRecoverProcessingError && processingErrorRecovery && (
-                        <div className={styles.errorRecovery}>
-                          <Text block>
-                            {processingErrorRecovery.description}
-                          </Text>
-                          <Button
-                            appearance="primary"
-                            size="small"
-                            icon={<EditRegular />}
-                            className={styles.errorRecoveryButton}
-                            onClick={() => { void processingErrorRecovery.onRecover() }}
-                            disabled={processingErrorRecovery.disabled}
-                            data-testid={`recover-processing-error-btn-${index}`}
-                          >
-                            {processingErrorRecovery.actionLabel}
-                          </Button>
-                        </div>
+                        <Text className={styles.errorDetails}>: {message.error.description}</Text>
                       )}
                     </MessageBarBody>
                   </MessageBar>
@@ -805,128 +765,36 @@ export default function MessageList({ messages, onCopyToInput, onCopyToNewConver
                 </div>
               )}
 
-              {/* Unified action buttons – shown on all non-user, non-loading messages */}
-              {!isUser && !message.isLoading && !message.error && (
+              {!message.isLoading && !message.error && (
                 <div className={styles.messageActions} data-testid={`message-actions-${index}`}>
-                  {/* 1. Copy to input box in this conversation */}
-                  {onCopyToInput && (() => {
-                    const disabled = Boolean(noTargetSelected || isSingleTurn || isOperatorLocked || isCrossTarget)
-                    const tip = noTargetSelected
-                      ? 'Cannot copy to this conversation — no target selected'
-                      : isSingleTurn
-                        ? 'Cannot copy to this conversation — target is single-turn'
-                        : isOperatorLocked
-                          ? 'Cannot copy to this conversation — you are not the operator of this attack'
-                          : isCrossTarget
-                            ? 'Cannot copy to this conversation — it used a different target'
-                            : 'Copy to input box in this conversation'
-                    return (
-                      <Tooltip content={tip} relationship="label">
+                  {onCopyToInput && (isUser || isSimulated || message.role === 'assistant') && (
+                    <Menu>
+                      <MenuTrigger disableButtonEnhancement>
                         <Button
                           appearance="subtle"
                           size="small"
                           icon={<ArrowReplyRegular />}
-                          disabled={disabled}
-                          onClick={() => onCopyToInput(index)}
                           data-testid={`copy-to-input-btn-${index}`}
                           className={styles.messageActionButton}
-                        />
-                      </Tooltip>
-                    )
-                  })()}
-
-                  {/* 2. Copy to input box in a new conversation (same attack) */}
-                  {onCopyToNewConversation && (() => {
-                    const disabled = Boolean(noTargetSelected || isOperatorLocked || isCrossTarget)
-                    const tip = noTargetSelected
-                      ? 'Cannot copy to a new conversation — no target selected'
-                      : isOperatorLocked
-                        ? 'Cannot copy to a new conversation — you are not the operator of this attack'
-                        : isCrossTarget
-                          ? 'Cannot copy to a new conversation — this attack used a different target'
-                          : 'Copy to input box in a new conversation'
-                    return (
-                      <Tooltip content={tip} relationship="label">
-                        <Button
-                          appearance="subtle"
-                          size="small"
-                          icon={<ArrowForwardRegular />}
-                          disabled={disabled}
-                          onClick={() => onCopyToNewConversation(index)}
-                          data-testid={`copy-to-new-conv-btn-${index}`}
-                          className={styles.messageActionButton}
-                        />
-                      </Tooltip>
-                    )
-                  })()}
-
-                  {/* 3. Branch into new conversation (same attack) */}
-                  {onBranchConversation && (() => {
-                    const disabled = Boolean(noTargetSelected || isSingleTurn || isOperatorLocked || isCrossTarget)
-                    const tip = noTargetSelected
-                      ? 'Cannot branch into new conversation — no target selected'
-                      : isSingleTurn
-                        ? 'Cannot branch into new conversation — target is single-turn'
-                        : isOperatorLocked
-                          ? 'Cannot branch into new conversation — you are not the operator of this attack'
-                          : isCrossTarget
-                            ? 'Cannot branch into new conversation — this attack used a different target'
-                            : 'Branch into new conversation'
-                    return (
-                      <Tooltip content={tip} relationship="label">
-                        <Button
-                          appearance="subtle"
-                          size="small"
-                          icon={<BranchForkRegular />}
-                          disabled={disabled}
-                          onClick={() => onBranchConversation(index)}
-                          data-testid={`branch-conv-btn-${index}`}
-                          className={styles.messageActionButton}
-                        />
-                      </Tooltip>
-                    )
-                  })()}
-
-                  {/* 4. Branch into new attack */}
-                  {(() => {
-                    const singleTurnBlock = isSingleTurn && !noTargetSelected
-                    if (onBranchAttack && !singleTurnBlock) {
-                      return (
-                        <Tooltip content="Branch into new attack" relationship="label">
-                          <Button
-                            appearance="subtle"
-                            size="small"
-                            icon={<ChatAddRegular />}
-                            onClick={() => onBranchAttack(index)}
-                            data-testid={`branch-attack-btn-${index}`}
-                            className={styles.messageActionButton}
-                          />
-                        </Tooltip>
-                      )
-                    }
-                    // Show disabled button with reason
-                    const tip = noTargetSelected
-                      ? 'Cannot branch into new attack — no target selected'
-                      : singleTurnBlock
-                        ? 'Cannot branch into new attack — target is single-turn'
-                        : undefined
-                    if (!tip) return null
-                    return (
-                      <Tooltip content={tip} relationship="label">
-                        <Button
-                          appearance="subtle"
-                          size="small"
-                          icon={<ChatAddRegular />}
-                          disabled
-                          data-testid={`branch-attack-btn-${index}`}
-                          className={styles.messageActionButton}
-                        />
-                      </Tooltip>
-                    )
-                  })()}
+                          aria-label="Copy conversation"
+                        >Copy conversation</Button>
+                      </MenuTrigger>
+                      <MenuPopover><MenuList>
+                        <MenuItem className={styles.copyMenuItem} onClick={() => onCopyToInput(index)} title="Copy this message to the prompt box">
+                          This conversation
+                        </MenuItem>
+                        <MenuItem className={styles.copyMenuItem} disabled={!onCopyToNewConversation || copyConversationDisabled || Boolean(newConversationDisabledReason)}
+                          title={newConversationDisabledReason ?? 'Copy the conversation through this message into the same attack'}
+                          onClick={() => onCopyToNewConversation?.(index)}>New conversation</MenuItem>
+                        <MenuItem className={styles.copyMenuItem} disabled={!onCopyToNewAttack || copyConversationDisabled}
+                          title="Copy the conversation through this message into a new attack"
+                          onClick={() => onCopyToNewAttack?.(index)}>New attack</MenuItem>
+                      </MenuList></MenuPopover>
+                    </Menu>
+                  )}
 
                   {/* Download: non-text media only */}
-                  {message.attachments && message.attachments.filter(a => a.type !== 'file' && a.url).map((att, ai) => (
+                  {!isUser && message.attachments && message.attachments.filter(a => a.type !== 'file' && a.url).map((att, ai) => (
                     <Tooltip key={ai} content={`Download ${att.name}`} relationship="label">
                       <Button
                         appearance="subtle"

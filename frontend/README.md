@@ -13,11 +13,52 @@ Your choice is saved in this browser. System follows the operating system's
 light/dark preference. High-contrast mode overrides every palette and hides
 decorations without forgetting the selected preset.
 
+## Conversation selection
+
+Opening a saved attack with related conversations automatically opens the
+desktop conversation drawer. This default applies once per attack; later send
+refreshes do not override your open/closed choice. Creating, copying, or repeating
+conversations still opens the desktop drawer. On narrow screens the drawer opens
+only when requested and closes after selecting a conversation.
+
+## Dataset catalog
+
+The **Datasets** page shows summaries of datasets already loaded into the backend's
+memory. When memory is empty, **Learn how to load datasets into memory** opens the
+[dataset-loading guide](https://microsoft.github.io/PyRIT/latest/code/datasets/loading-datasets/).
+Use the same memory as the backend, then select **Refresh** in the catalog.
+The catalog does not download providers or prefetch individual examples.
+
+Open a dataset to inspect its stored examples. Search matches text prompts and
+objectives on the server, not dataset names, and it does not search
+simulated-conversation JSON. Filter by that seed type to find those examples.
+Matching ignores ASCII case only. Examples stay in the groups the server
+returns, including multimodal members. Expanding an example loads its stored
+records for inspection only: nothing is executed, imported into chat, or played
+as media. Filters, page size, and the open example stay in the address bar.
+**Back to datasets** returns to the catalog search, facets, and sort you came
+from. A direct link without that return state goes to `/datasets`.
+On narrow screens, scroll the example table horizontally to read its columns.
+Expanded details stack each label above its stored value.
+
 ## Resuming a scenario run
 
 Failed runs offer **Resume run** on the run page and **Resume** in Scanner History.
 See the [GUI guide](../doc/gui/0_gui.md#resuming-a-failed-scanner-run) for resume
 behavior and the saved launch configuration requirement.
+
+## Default labels after runtime changes
+
+When the runtime configuration changes, CoPyRIT reloads the server's default
+labels before allowing new chat attacks, copies saved to new attacks, or scans. Browser label
+overrides and saved attack/run attribution are preserved. If loading fails,
+use **Retry default labels** in the error banner without restarting the runtime.
+The interface stays mounted while the runtime is unavailable, even if its
+readiness response has no generation; defaults remain unloaded until recovery.
+If the runtime changes while preparing a new chat message or saving a draft to
+a new attack, the draft is kept so you can retry after loading finishes. Copies
+and drafts saved to an existing attack remain available during defaults reloads
+and keep that attack's attribution.
 
 ## Development
 
@@ -147,6 +188,10 @@ E2E flow tests run in two modes controlled by Playwright projects and an environ
 - **Seeded** (`--project seeded`, default for CI): Messages are stored directly in the database with `send: false` using dummy credentials. No real API keys needed. Tests cover the full UI flow (display, branching, conversation switching, promoting) without calling any external service.
 
 - **Live** (`--project live`, requires `E2E_LIVE_MODE=true`): Messages are sent to real OpenAI endpoints with `send: true`. Each target variant requires endpoint and model environment variables plus either an API key or an Azure endpoint accessible through the current Entra identity. Variants without a usable configuration are automatically skipped. Tests verify that real target responses render correctly.
+
+Conversation-selection helpers check the toggle's `aria-expanded` state, not
+drawer visibility during an animation. Use accessible row clicks and wait for
+the destination URL and transcript before asserting its contents.
 
 ```bash
 # Seeded integration (no credentials needed)

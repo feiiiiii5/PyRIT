@@ -12,11 +12,13 @@ from typing import Any
 from fastapi import FastAPI
 
 from pyrit.backend.models.initializers import ConfiguredInitializerSetting
+from pyrit.backend.services.analytics_service import get_analytics_service
 from pyrit.backend.services.configuration_file_service import ConfigurationFileService
 from pyrit.backend.services.environment_file_service import EnvironmentFileService
 from pyrit.backend.services.scenario_run_service import get_scenario_run_service, peek_scenario_run_service
 from pyrit.backend.services.service_lifecycle import (
     close_services_async,
+    has_active_analytics_work,
     has_active_manual_sends,
     outstanding_estimates,
 )
@@ -55,15 +57,26 @@ class RuntimeLifecycle:
         self.operations: set[asyncio.Task[None]] = set()
         self.management_operations: set[asyncio.Task[None]] = set()
         self.apply_task: asyncio.Task[None] | None = None
+        self._shutdown_task: asyncio.Task[None] | None = None
         self.topology_supported = all(
             os.getenv(key, "1") == "1"
             for key in ("WEB_CONCURRENCY", "UVICORN_WORKERS", "PYRIT_API_WORKERS", "PYRIT_REPLICAS")
         )
 
+    @property
+    def is_stopping(self) -> bool:
+        """Whether admission is closed even if an accepted apply is still finishing."""
+        return self._shutdown_task is not None
+
+    @property
+    def reported_state(self) -> str:
+        """Externally visible state, including admission closure before cleanup finishes."""
+        return "stopping" if self.is_stopping else self.state
+
     def status(self) -> dict[str, Any]:
         """Return status recoverable after a disconnected apply."""
         return {
-            "state": self.state,
+            "state": self.reported_state,
             "generation": self.generation,
             "version": self.version,
             "outcome": self.outcome,
@@ -134,6 +147,8 @@ class RuntimeLifecycle:
         Returns:
             dict[str, Any]: Accepted operation or admission rejection.
         """
+        if self.is_stopping:
+            return {**self.status(), "outcome": "stopping"}
         if not self.topology_supported:
             return {
                 **self.status(),
@@ -202,7 +217,7 @@ class RuntimeLifecycle:
                 await self._management_async(config)
                 self.version = current_version
                 self._publish(config)
-            except Exception:
+            except (Exception, asyncio.CancelledError) as error:
                 logger.exception(
                     "PyRIT live apply failed phase=%s generation=%s",
                     "mutation" if mutated else "preflight",
@@ -218,6 +233,8 @@ class RuntimeLifecycle:
                     if mutated
                     else "Configuration or memory settings are invalid. Memory changes require a restart."
                 )
+                if isinstance(error, asyncio.CancelledError):
+                    raise
             finally:
                 logger.info("PyRIT apply outcome=%s generation=%s", self.outcome, self.generation)
 
@@ -229,20 +246,52 @@ class RuntimeLifecycle:
             or self.operations
             or outstanding_estimates()
             or has_active_manual_sends()
+            or has_active_analytics_work()
         )
 
     async def shutdown_async(self) -> None:
-        """Stop the current scheduler and close services owned by this process."""
-        if self.apply_task and not self.apply_task.done():
-            await asyncio.shield(self.apply_task)
+        """Drain admitted work before closure, deferring caller cancellation until cleanup finishes."""
+        if self._shutdown_task is None:
+            self._shutdown_task = asyncio.create_task(self._shutdown_runtime_async())
+        cancellation: asyncio.CancelledError | None = None
+        while not self._shutdown_task.done():
+            try:
+                await asyncio.shield(self._shutdown_task)
+            except asyncio.CancelledError as error:
+                cancellation = error
+        self._shutdown_task.result()
+        if cancellation is not None:
+            raise cancellation
+
+    async def _shutdown_runtime_async(self) -> None:
+        """Finish retained requests without cancelling their offloaded writes."""
+        service = peek_scenario_run_service()
+        if service:
+            service.stop_admission()
+        pending = self.operations | self.management_operations
+        if self.apply_task is not None:
+            pending.add(self.apply_task)
+        results = await asyncio.gather(*pending, return_exceptions=True)
+        errors = [result for result in results if isinstance(result, BaseException)]
         self.state = "stopping"
         try:
             service = peek_scenario_run_service()
             if service:
                 await service.shutdown_async()
-        finally:
-            try:
-                await close_services_async()
-            finally:
-                if CentralMemory._memory_instance is not None:
-                    await CentralMemory.get_memory_instance().dispose_engine_async()
+        except (Exception, asyncio.CancelledError) as error:
+            errors.append(error)
+        try:
+            await close_services_async()
+        except (Exception, asyncio.CancelledError) as error:
+            errors.append(error)
+        try:
+            if get_analytics_service.cache_info().currsize:
+                raise RuntimeError("Analytics closure did not finish; memory was not disposed.")
+            if CentralMemory._memory_instance is not None:
+                await CentralMemory.get_memory_instance().dispose_engine_async()
+        except (Exception, asyncio.CancelledError) as error:
+            errors.append(error)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("Runtime shutdown failed after draining admitted work.", errors)

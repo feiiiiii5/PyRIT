@@ -217,8 +217,14 @@ class MockPromptTarget(PromptTarget):
 
     prompt_sent: list[str]
 
-    def __init__(self, *, id=None, rpm=None) -> None:  # noqa: A002
-        super().__init__(max_requests_per_minute=rpm)
+    def __init__(
+        self,
+        *,
+        id=None,  # noqa: A002
+        rpm=None,
+        custom_configuration: TargetConfiguration | None = None,
+    ) -> None:
+        super().__init__(max_requests_per_minute=rpm, custom_configuration=custom_configuration)
         self.id = id
         self.prompt_sent = []
 
@@ -387,7 +393,7 @@ async def store_message_async(message: Message) -> Message:
         Message: The same message.
     """
     memory = CentralMemory.get_memory_instance()
-    piece_ids = [piece.id for piece in message.message_pieces if piece.id is not None]
+    piece_ids = [piece.id for piece in message.message_pieces]
     if not piece_ids or await memory.get_message_pieces_async(prompt_ids=piece_ids):
         return message
 

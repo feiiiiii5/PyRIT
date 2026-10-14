@@ -33,6 +33,7 @@ from pyrit.models import (
     MessagePiece,
     PromptDataType,
     PromptResponseError,
+    ToolExecutionMetadata,
 )
 from pyrit.models.messages.chat_message import FunctionCall
 from pyrit.prompt_target.common.target_capabilities import TargetCapabilities
@@ -65,6 +66,12 @@ class _SerializedPiece:
     placement: Literal["inline", "top_level"]
 
 
+@dataclass(frozen=True)
+class _ToolDispatchResult:
+    output: object
+    invoked: bool
+
+
 class MessagePieceType(str, Enum):
     """Enumeration of different types of message pieces."""
 
@@ -80,6 +87,10 @@ class MessagePieceType(str, Enum):
     MCP_CALL = "mcp_call"
     MCP_LIST_TOOLS = "mcp_list_tools"
     MCP_APPROVAL_REQUEST = "mcp_approval_request"
+
+
+# Fields of a web_search_call input item (all required); the output item has the same ones.
+_WEB_SEARCH_CALL_INPUT_FIELDS: tuple[str, ...] = ("id", "type", "status", "action")
 
 
 class _ResponseToolCallContent(BaseModel):
@@ -340,14 +351,14 @@ class OpenAIResponseTarget(OpenAITarget):
             "arguments": call.function.arguments,
         }
 
-    def _serialize_tool_call(self, piece: MessagePiece) -> dict[str, Any]:
+    def _serialize_tool_call(self, piece: MessagePiece) -> dict[str, Any] | None:
         stored = _ResponseToolCallContent.model_validate_json(piece.converted_value).model_dump(exclude_unset=True)
         if stored.get("type") == "web_search_call":
-            return {
-                "type": stored["type"],
-                "call_id": stored.get("call_id"),
-                "query": stored.get("query"),
-            }
+            # The input item takes exactly the output item's fields, and all of them are required. Older rows
+            # kept only type and id, which the API rejects, so those can't be replayed.
+            if any(stored.get(key) is None for key in _WEB_SEARCH_CALL_INPUT_FIELDS):
+                return None
+            return {key: stored[key] for key in _WEB_SEARCH_CALL_INPUT_FIELDS}
         filtered = {"type": stored["type"]}
         filtered.update({key: stored[key] for key in ("call_id", "query", "name", "arguments") if key in stored})
         return filtered
@@ -370,7 +381,14 @@ class OpenAIResponseTarget(OpenAITarget):
         if data_type == "function_call":
             return _SerializedPiece(item=dict(self._serialize_function_call(piece)), placement="top_level")
         if data_type == "tool_call":
-            return _SerializedPiece(item=self._serialize_tool_call(piece), placement="top_level")
+            tool_call = self._serialize_tool_call(piece)
+            if tool_call is None:
+                logger.warning(
+                    "Skipping web_search_call in message index %d: it lacks the id, status or action the API needs.",
+                    message_index,
+                )
+                return None
+            return _SerializedPiece(item=tool_call, placement="top_level")
         if data_type == "function_call_output":
             return _SerializedPiece(item=dict(self._serialize_function_call_output(piece)), placement="top_level")
         raise ValueError(f"Unsupported data type '{data_type}' in message index {message_index}")
@@ -543,10 +561,11 @@ class OpenAIResponseTarget(OpenAITarget):
         """
         Construct a Message from a Response API response.
 
-        For a truncated response (see ``_is_truncated_response``), empty output sections are
-        tolerated, partial tool/function calls are skipped so an incomplete call cannot re-enter the
-        agentic loop, and a graceful empty text piece is appended when no visible response was
-        produced. Reasoning, any partial text, and structured refusals are always preserved.
+        Empty output sections are tolerated on a truncated response (see
+        ``_is_truncated_response``), where partial tool/function calls are also skipped so an
+        incomplete call cannot re-enter the agentic loop. Whenever no visible response was
+        produced — truncated or completed — a graceful empty text piece is appended. Reasoning,
+        any partial text, and structured refusals are always preserved.
 
         Args:
             response: The Response object from OpenAI SDK.
@@ -585,7 +604,16 @@ class OpenAIResponseTarget(OpenAITarget):
             if piece.original_value and piece.original_value_data_type != "reasoning":
                 has_visible_response = True
 
-        if truncated and not has_visible_response:
+        if not has_visible_response:
+            # Append a graceful empty marker piece and keep any reasoning pieces when a
+            # response with no readable section is found
+            if not truncated:
+                logger.warning(
+                    "Responses output for conversation %s completed with no readable section; "
+                    "returning an empty response marker. Reasoning-only output or a section type "
+                    "PyRIT does not model can cause this.",
+                    request.conversation_id,
+                )
             empty_piece = build_empty_truncated_response(request=request).message_pieces[0]
             extracted_response_pieces.append(empty_piece)
 
@@ -593,7 +621,14 @@ class OpenAIResponseTarget(OpenAITarget):
         # reasoning commonly precedes the actual message in provider output, so
         # retain it for memory/debugging after the actionable response pieces.
         # This must stay ahead of the metadata writes below, which target the first piece.
-        extracted_response_pieces.sort(key=lambda piece: piece.converted_value_data_type == "reasoning")
+        # Hosted tool records (e.g. web_search_call) also precede the answer; keep them after it too. Replay
+        # order is unaffected because tool records are always emitted before the message item.
+        extracted_response_pieces.sort(
+            key=lambda piece: (
+                piece.converted_value_data_type == "reasoning",
+                piece.converted_value_data_type == "tool_call",
+            )
+        )
 
         # Capture token usage and the stop reason in the first piece's metadata. This also runs on
         # the truncated path: usage is populated on token-limit responses and is most valuable
@@ -661,8 +696,8 @@ class OpenAIResponseTarget(OpenAITarget):
             for tool_call_section in tool_call_sections:
                 tool_output = await self._execute_call_section_async(tool_call_section)
                 tool_piece = self._make_tool_piece(
-                    tool_output,
-                    tool_call_section["call_id"],
+                    result=tool_output,
+                    call_id=tool_call_section["call_id"],
                     reference_piece=message_piece,
                 )
                 tool_message = Message(message_pieces=[tool_piece])
@@ -817,20 +852,9 @@ class OpenAIResponseTarget(OpenAITarget):
             piece_type = "function_call"
 
         elif section_type == MessagePieceType.WEB_SEARCH_CALL:
-            # Forward web_search_call with only API-expected fields
-            # Note: web search may have different field structure than function calls
-            web_search_data = {
-                "type": "web_search_call",
-            }
-            # Add optional fields if they exist
-            if hasattr(section, "call_id") and section.call_id:
-                web_search_data["call_id"] = section.call_id
-            if hasattr(section, "query") and section.query:
-                web_search_data["query"] = section.query
-            if hasattr(section, "id") and section.id:
-                web_search_data["id"] = section.id
-
-            piece_value = json.dumps(web_search_data, separators=(",", ":"))
+            # Keep the whole item (id, status and the search action). The API needs all of it to accept the
+            # call back as input on the next turn.
+            piece_value = json.dumps(section.model_dump(mode="json", exclude_none=True), separators=(",", ":"))
             piece_type = "tool_call"
 
         elif section_type == "custom_tool_call":
@@ -899,7 +923,7 @@ class OpenAIResponseTarget(OpenAITarget):
                     calls.append(cast("dict[str, Any]", section))
         return calls
 
-    async def _execute_call_section_async(self, tool_call_section: dict[str, Any]) -> object:
+    async def _execute_call_section_async(self, tool_call_section: dict[str, Any]) -> _ToolDispatchResult:
         """
         Execute a function call using the matching tool.
 
@@ -907,9 +931,8 @@ class OpenAIResponseTarget(OpenAITarget):
             tool_call_section: The function_call section dict.
 
         Returns:
-            A JSON-serializable payload that will be sent as function_call_output.
-            If fail_on_missing_function=False and a function is missing or no function is not called, returns:
-            {"error": "function_not_found", "missing_function": "<name>", "available_functions": [...]}
+            The output payload and whether the tool was invoked. Tolerant dispatch failures
+            retain their error payload with invoked=False.
 
         Raises:
             ValueError: If the function call section is missing a 'name' field.
@@ -920,10 +943,10 @@ class OpenAIResponseTarget(OpenAITarget):
         if not name:
             if self._fail_on_missing_function:
                 raise ValueError("Function call section missing 'name' field")
-            return {
-                "error": "missing_function_name",
-                "tool_call_section": tool_call_section,
-            }
+            return _ToolDispatchResult(
+                output={"error": "missing_function_name", "tool_call_section": tool_call_section},
+                invoked=False,
+            )
 
         args_json = tool_call_section.get("arguments", "{}")
         try:
@@ -933,50 +956,54 @@ class OpenAIResponseTarget(OpenAITarget):
             if self._fail_on_missing_function:
                 raise ValueError(f"Malformed arguments for function '{name}': {args_json}") from None
             logger.warning("Malformed arguments for function '%s': %s", name, args_json)
-            return {
-                "error": "malformed_arguments",
-                "function": name,
-                "raw_arguments": args_json,
-            }
+            return _ToolDispatchResult(
+                output={"error": "malformed_arguments", "function": name, "raw_arguments": args_json},
+                invoked=False,
+            )
         await self._initialize_tools_async()
         configured_tool = next((tool for tool in self._tools if tool.name == name), None)
         if configured_tool is not None:
             if not isinstance(args, dict):
                 if self._fail_on_missing_function:
                     raise ValueError(f"Arguments for function '{name}' must be a JSON object")
-                return {
-                    "error": "malformed_arguments",
-                    "function": name,
-                    "raw_arguments": args_json,
-                }
-            return await configured_tool.execute_async(arguments=args)
+                return _ToolDispatchResult(
+                    output={"error": "malformed_arguments", "function": name, "raw_arguments": args_json},
+                    invoked=False,
+                )
+            return _ToolDispatchResult(output=await configured_tool.execute_async(arguments=args), invoked=True)
 
         custom_function = self._custom_functions.get(name)
         if custom_function is not None:
-            return await custom_function(cast("dict[str, Any]", args))
+            return _ToolDispatchResult(output=await custom_function(cast("dict[str, Any]", args)), invoked=True)
 
         if self._fail_on_missing_function:
             raise KeyError(f"Function '{name}' is not registered")
         available_functions = sorted({*(tool.name for tool in self._tools), *self._custom_functions})
         logger.warning("Function '%s' not registered. Available: %s", name, available_functions)
-        return {
-            "error": "function_not_found",
-            "missing_function": name,
-            "available_functions": available_functions,
-        }
+        return _ToolDispatchResult(
+            output={
+                "error": "function_not_found",
+                "missing_function": name,
+                "available_functions": available_functions,
+            },
+            invoked=False,
+        )
 
-    def _make_tool_piece(self, output: object, call_id: str, *, reference_piece: MessagePiece) -> MessagePiece:
+    def _make_tool_piece(
+        self, *, result: _ToolDispatchResult, call_id: str, reference_piece: MessagePiece
+    ) -> MessagePiece:
         """
         Create a function_call_output MessagePiece.
 
         Args:
-            output: The tool output to wrap.
+            result: The dispatch result to record.
             call_id: The call ID for the function call.
             reference_piece: A reference piece to copy conversation context from.
 
         Returns:
             A MessagePiece containing the function call output.
         """
+        output = result.output
         output_str = output if isinstance(output, str) else json.dumps(output, separators=(",", ":"))
         return MessagePiece(
             role="tool",
@@ -986,4 +1013,5 @@ class OpenAIResponseTarget(OpenAITarget):
             ),
             original_value_data_type="function_call_output",
             conversation_id=reference_piece.conversation_id,
+            prompt_metadata=ToolExecutionMetadata(invoked=result.invoked).to_metadata(),
         )

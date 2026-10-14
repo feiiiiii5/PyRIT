@@ -6,6 +6,7 @@ Tests for backend target service.
 """
 
 import os
+from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,7 +14,7 @@ import pytest
 from pyrit.backend.models.targets import CreateTargetRequest
 from pyrit.backend.services.target_service import TargetService, get_target_service
 from pyrit.models import ComponentIdentifier
-from pyrit.prompt_target import PromptTarget, TargetCapabilities
+from pyrit.prompt_target import GitHubCopilotTarget, PromptTarget, TargetCapabilities
 from pyrit.registry import TargetRegistry
 from unit.mocks import MockPromptTarget
 
@@ -257,6 +258,47 @@ class TestListTargetTypes:
         assert "api_key" in openai_entry.supported_auth_modes
         assert "identity" in openai_entry.supported_auth_modes
 
+    async def test_types_include_github_copilot_form_parameters_async(self) -> None:
+        service = TargetService()
+
+        result = await service.list_target_types_async()
+
+        entry = next(item for item in result.items if item.target_type == "GitHubCopilotTarget")
+        parameters = {parameter.name: parameter for parameter in entry.parameters}
+        assert parameters["model_name"].required
+        assert not parameters["github_token"].required
+        assert parameters["github_token"].sensitive
+        assert {"working_directory", "retain_session", "response_timeout_seconds", "max_requests_per_minute"} <= set(
+            parameters
+        )
+        assert not {"endpoint", "api_key", "underlying_model"} & set(parameters)
+        assert "identity" not in entry.supported_auth_modes
+
+    @pytest.mark.parametrize(
+        ("target_type", "parameter_names"),
+        [
+            ("OpenAIChatTarget", {"endpoint", "model_name"}),
+            ("AzureBlobStorageTarget", {"container_url"}),
+            ("HackAPromptTarget", {"cookie", "session_id"}),
+            ("HuggingFaceChatTarget", {"hf_access_token"}),
+            ("PromptShieldTarget", {"endpoint"}),
+            ("AzureMLChatTarget", {"endpoint"}),
+        ],
+    )
+    async def test_types_mark_env_backed_parameters_required(
+        self,
+        target_type: str,
+        parameter_names: set[str],
+    ) -> None:
+        """Environment-backed values enforced by targets are required metadata."""
+        service = TargetService()
+
+        result = await service.list_target_types_async()
+
+        entry = next(item for item in result.items if item.target_type == target_type)
+        parameters = {parameter.name: parameter for parameter in entry.parameters}
+        assert all(parameters[name].required for name in parameter_names)
+
     async def test_types_include_structured_parameters(self) -> None:
         service = TargetService()
 
@@ -272,16 +314,58 @@ class TestListTargetTypes:
         assert weights_parameter.is_list is True
         assert weights_parameter.required is False
 
-    async def test_types_preserve_all_registry_parameters(self) -> None:
+    async def test_types_keep_registry_parameter_order_without_mutating_metadata(self) -> None:
         service = TargetService()
         result = await service.list_target_types_async()
         metadata_by_name = {
             metadata.class_name: metadata for metadata in service._registry.get_all_registered_class_metadata()
         }
 
-        assert {entry.target_type for entry in result.items} == set(metadata_by_name)
         for entry in result.items:
-            assert entry.parameters == list(metadata_by_name[entry.target_type].parameters)
+            entry_names = [parameter.name for parameter in entry.parameters]
+            registry_names = [parameter.name for parameter in metadata_by_name[entry.target_type].parameters]
+            assert entry_names == [name for name in registry_names if name in entry_names]
+
+        registry_openai = {parameter.name: parameter for parameter in metadata_by_name["OpenAIChatTarget"].parameters}
+        assert registry_openai["endpoint"].required is False
+        assert registry_openai["model_name"].required is False
+
+    async def test_types_expose_component_external_inputs(self) -> None:
+        service = TargetService()
+        result = await service.list_target_types_async()
+
+        parameters = {entry.target_type: {parameter.name for parameter in entry.parameters} for entry in result.items}
+        assert {"PlaywrightTarget", "PlaywrightCopilotTarget", "WebsocketTarget"}.isdisjoint(parameters)
+        assert "api_key" in parameters["OpenAIChatTarget"]
+        assert "custom_configuration" not in parameters["OpenAIChatTarget"]
+        assert "n_seconds" in parameters["OpenAIVideoTarget"]
+
+    async def test_registry_metadata_keeps_parameters_the_api_cannot_set(self) -> None:
+        metadata = TargetService()._registry.get_registered_class_metadata("OpenAIChatTarget")
+        assert metadata is not None
+        registry_parameters = {parameter.name: parameter for parameter in metadata.parameters}
+
+        assert not registry_parameters["custom_configuration"].is_external_input
+
+    async def test_types_describe_the_video_duration_as_an_int(self) -> None:
+        service = TargetService()
+        result = await service.list_target_types_async()
+
+        entry = next(item for item in result.items if item.target_type == "OpenAIVideoTarget")
+        n_seconds = next(
+            parameter for parameter in entry.model_dump(mode="json")["parameters"] if parameter["name"] == "n_seconds"
+        )
+        assert {key: n_seconds[key] for key in ("type_name", "is_list", "choices", "default", "required")} == {
+            "type_name": "int",
+            "is_list": False,
+            "choices": None,
+            "default": "4",
+            "required": False,
+        }
+        metadata = service._registry.get_registered_class_metadata("OpenAIVideoTarget")
+        assert metadata is not None
+        registry_n_seconds = next(parameter for parameter in metadata.parameters if parameter.name == "n_seconds")
+        assert "Literal['4', '8', '12']" in registry_n_seconds.type_name
 
     async def test_types_cold_and_warm_results_are_equal(self) -> None:
         service = TargetService()
@@ -329,13 +413,6 @@ class TestListTargetTypes:
                 False,
                 ["text/plain", "text/html"],
             ),
-            (
-                "PlaywrightCopilotTarget",
-                "copilot_type",
-                "CopilotType",
-                False,
-                ["consumer", "m365"],
-            ),
         ],
     )
     async def test_types_include_enum_parameters(
@@ -358,8 +435,108 @@ class TestListTargetTypes:
         assert parameter.choices == choices
 
 
+@pytest.mark.usefixtures("patch_central_database")
+@pytest.mark.parametrize(
+    ("github_token", "environment_token", "expected_token"),
+    [
+        ("test-github-token", "", "test-github-token"),
+        (None, "environment-github-token", "environment-github-token"),
+        ("test-github-token", "environment-github-token", "test-github-token"),
+    ],
+)
+async def test_create_github_copilot_target_async(
+    *, github_token: str | None, environment_token: str, expected_token: str
+) -> None:
+    service = TargetService()
+    params = {"model_name": "gpt-5-mini"}
+    if github_token is not None:
+        params["github_token"] = github_token
+
+    with (
+        patch.dict("sys.modules", {"copilot": ModuleType("copilot")}),
+        patch.dict(os.environ, {"GITHUB_TOKEN": environment_token}),
+    ):
+        target = await service.create_target_async(
+            request=CreateTargetRequest(type="GitHubCopilotTarget", params=params)
+        )
+
+    assert target.identifier.class_name == "GitHubCopilotTarget"
+    assert target.identifier.params["model_name"] == "gpt-5-mini"
+    target_obj = service.get_target_object(target_registry_name=target.target_registry_name)
+    assert isinstance(target_obj, GitHubCopilotTarget)
+    assert target_obj._github_token == expected_token
+    assert "github_token" not in target.model_dump_json()
+    assert "test-github-token" not in target.model_dump_json()
+    assert "environment-github-token" not in target.model_dump_json()
+
+
+@pytest.mark.usefixtures("patch_central_database")
+@pytest.mark.parametrize(
+    ("github_token", "environment_token"),
+    [
+        (None, None),
+        (None, ""),
+        (None, " \t"),
+        ("", ""),
+        (" \t", ""),
+        ("", "environment-github-token"),
+    ],
+)
+async def test_create_github_copilot_target_requires_token_async(
+    *, github_token: str | None, environment_token: str | None
+) -> None:
+    service = TargetService()
+    params = {"model_name": "gpt-5-mini"}
+    if github_token is not None:
+        params["github_token"] = github_token
+    environment = {"GH_TOKEN": "sdk-fallback-token"}
+    if environment_token is not None:
+        environment["GITHUB_TOKEN"] = environment_token
+
+    with (
+        patch.dict(os.environ, environment, clear=True),
+        patch.object(service._registry, "create_instance_from_external_input") as create_instance,
+        pytest.raises(
+            ValueError,
+            match=r"Enter GitHub Token or configure GITHUB_TOKEN for this CoPyRIT instance.*\.env/\.env\.local",
+        ),
+    ):
+        await service.create_target_async(
+            request=CreateTargetRequest(name="copilot", type="GitHubCopilotTarget", params=params)
+        )
+
+    create_instance.assert_not_called()
+    assert service.get_target_object(target_registry_name="copilot") is None
+
+
 class TestCreateTarget:
     """Tests for TargetService.create_target method."""
+
+    async def test_create_target_rejects_parameters_that_take_python_objects(self, sqlite_instance) -> None:
+        service = TargetService()
+        request = CreateTargetRequest(name="text", type="TextTarget", params={"custom_configuration": {}})
+
+        with pytest.raises(ValueError, match="'custom_configuration' of 'TextTarget' cannot be set through the API"):
+            await service.create_target_async(request=request)
+
+        assert service.get_target_object(target_registry_name="text") is None
+
+    async def test_create_target_accepts_scalar_alternative_of_union(self, sqlite_instance) -> None:
+        service = TargetService()
+        request = CreateTargetRequest(
+            name="video",
+            type="OpenAIVideoTarget",
+            params={
+                "endpoint": "https://example.openai.azure.com/openai/v1",
+                "api_key": "test-key",
+                "model_name": "sora-2",
+                "n_seconds": 8,
+            },
+        )
+
+        await service.create_target_async(request=request)
+
+        assert service.get_target_object(target_registry_name="video")._n_seconds == "8"
 
     async def test_create_target_raises_for_invalid_type(self) -> None:
         """Test that create_target raises for invalid target type."""
@@ -415,13 +592,33 @@ class TestCreateTarget:
                 request=CreateTargetRequest(name=name, type="TextTarget", params={}),
             )
 
-    async def test_create_target_delegates_construction_to_registry(self, sqlite_instance) -> None:
-        """Every target construction path is owned by the registry."""
+    async def test_create_target_registers_nothing_when_response_mapping_fails(self, sqlite_instance) -> None:
         service = TargetService()
-        with patch.object(service._registry, "create_instance", wraps=service._registry.create_instance) as create:
+
+        with (
+            patch(
+                "pyrit.backend.services.target_service.target_object_to_instance",
+                side_effect=RuntimeError("mapping failed"),
+            ),
+            pytest.raises(RuntimeError, match="mapping failed"),
+        ):
+            await service.create_target_async(
+                request=CreateTargetRequest(name="unmapped", type="TextTarget", params={}),
+            )
+
+        assert service.get_target_object(target_registry_name="unmapped") is None
+
+    async def test_create_target_delegates_construction_to_registry(self, sqlite_instance) -> None:
+        """Every target construction path is owned by the registry, through its external-input path."""
+        service = TargetService()
+        with patch.object(
+            service._registry,
+            "create_instance_from_external_input",
+            wraps=service._registry.create_instance_from_external_input,
+        ) as create:
             await service.create_target_async(request=CreateTargetRequest(type="TextTarget", params={}))
 
-        create.assert_called_once()
+        create.assert_called_once_with("TextTarget", params={})
 
     async def test_create_gandalf_target_coerces_level_string(self, sqlite_instance) -> None:
         """A Gandalf level from the JSON request is coerced to its enum before construction."""
@@ -635,6 +832,37 @@ class TestCreateTargetEntraAuth:
                 assert target_obj._api_key_provider is _test_token_provider  # type: ignore[attr-defined]
                 assert target_obj._api_key == ""  # type: ignore[attr-defined]
 
+    async def test_create_azure_blob_target_with_identity_preserves_auth_intent(self, sqlite_instance) -> None:
+        service = TargetService()
+        request = CreateTargetRequest(
+            type="AzureBlobStorageTarget",
+            params={"container_url": "https://test.blob.core.windows.net/test"},
+            auth_mode="identity",
+        )
+
+        result = await service.create_target_async(request=request)
+
+        target_obj = service.get_target_object(target_registry_name=result.target_registry_name)
+        assert target_obj._auth_mode == "identity"  # type: ignore[attr-defined]
+
+    async def test_create_azure_blob_target_with_identity_discards_sas_token(self, sqlite_instance) -> None:
+        """A caller-supplied sas_token must not silently override identity-based auth."""
+        service = TargetService()
+        request = CreateTargetRequest(
+            type="AzureBlobStorageTarget",
+            params={
+                "container_url": "https://test.blob.core.windows.net/test",
+                "sas_token": "attacker-supplied-token",
+            },
+            auth_mode="identity",
+        )
+
+        result = await service.create_target_async(request=request)
+
+        target_obj = service.get_target_object(target_registry_name=result.target_registry_name)
+        assert target_obj._sas_token is None  # type: ignore[attr-defined]
+        assert target_obj._auth_mode == "identity"  # type: ignore[attr-defined]
+
     async def test_create_openai_target_with_identity_non_azure_endpoint_raises(self, sqlite_instance) -> None:
         """The target (not the service) rejects an unrecognized endpoint under identity auth."""
 
@@ -784,4 +1012,57 @@ class TestFrontendBackendCompatibilitySync:
             f"TARGET_EVAL_PARAM_FALLBACKS changed to {TARGET_EVAL_PARAM_FALLBACKS}. "
             f"Update effectiveUnderlyingModel() in CreateTargetDialog.tsx to match, "
             f"then update this test's expected dict."
+        )
+
+    def test_required_target_parameters_match_frontend_form_capabilities(self) -> None:
+        """
+        Guard the dynamic target form against new required Python-only inputs.
+
+        Scalar, choice, simple-list, and dictionary parameters are rendered from
+        metadata. Connection/auth parameters and RoundRobin inputs have dedicated
+        controls. The remaining targets require live Python objects and must stay
+        excluded until the frontend gains an explicit policy for them.
+        """
+        connection_parameters = {
+            "api_key",
+            "endpoint",
+            "model_name",
+            "underlying_model",
+            "underlying_model_name",
+        }
+        scalar_types = {"bool", "float", "int", "str"}
+        simple_list_types = {"list[bool]", "list[float]", "list[int]", "list[str]"}
+        unsupported_required: dict[str, list[str]] = {}
+
+        registry = TargetRegistry.get_registry_singleton()
+        for metadata in registry.get_all_registered_class_metadata():
+            unsupported_names: list[str] = []
+            for parameter in metadata.parameters:
+                if not parameter.required:
+                    continue
+                if parameter.name in connection_parameters:
+                    continue
+                if metadata.class_name == "RoundRobinTarget" and parameter.name in {"targets", "weights"}:
+                    continue
+                if parameter.reference_type or parameter.variants:
+                    unsupported_names.append(parameter.name)
+                    continue
+                if parameter.choices:
+                    continue
+                if parameter.type_name in scalar_types or parameter.type_name in simple_list_types:
+                    continue
+                if parameter.type_name == "dict" or parameter.type_name.startswith("dict["):
+                    continue
+                unsupported_names.append(parameter.name)
+            if unsupported_names:
+                unsupported_required[metadata.class_name] = sorted(unsupported_names)
+
+        assert unsupported_required == {
+            "PlaywrightCopilotTarget": ["page"],
+            "PlaywrightTarget": ["interaction_func", "page"],
+            "WebsocketTarget": ["initialization_strings", "message_builder", "response_parser"],
+        }, (
+            "The target registry's required parameters changed. Update "
+            "frontend/src/components/Config/targetParameterPolicy.ts with a renderable or "
+            "explicitly unsupported policy, then update this expected catalog."
         )

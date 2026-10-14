@@ -48,6 +48,35 @@ describe("MessageList", () => {
     ).toBeInTheDocument();
   });
 
+  it.each(["This conversation", "New conversation", "New attack"])("copies through one menu to %s", async (destination: string) => {
+    const user = userEvent.setup();
+    const onCopyToInput = jest.fn();
+    const onCopyToNewConversation = jest.fn();
+    const onCopyToNewAttack = jest.fn();
+    render(<TestWrapper><MessageList messages={mockMessages}
+      onCopyToInput={onCopyToInput} onCopyToNewConversation={onCopyToNewConversation}
+      onCopyToNewAttack={onCopyToNewAttack} /></TestWrapper>);
+    await user.click(screen.getAllByRole("button", { name: "Copy conversation" })[1]);
+    expect(screen.getAllByRole("menuitem")).toHaveLength(3);
+    await user.click(screen.getByRole("menuitem", { name: destination }));
+    const handler = destination === "This conversation" ? onCopyToInput
+      : destination === "New conversation" ? onCopyToNewConversation : onCopyToNewAttack;
+    expect(handler).toHaveBeenCalledWith(1);
+    expect(onCopyToInput.mock.calls.length + onCopyToNewConversation.mock.calls.length + onCopyToNewAttack.mock.calls.length).toBe(1);
+  });
+
+  it("allows local and new-attack copies when the source attack is read-only", async () => {
+    const user = userEvent.setup();
+    render(<TestWrapper><MessageList messages={mockMessages}
+      onCopyToInput={jest.fn()} onCopyToNewConversation={jest.fn()} onCopyToNewAttack={jest.fn()}
+      newConversationDisabledReason="This attack is read-only." /></TestWrapper>);
+    await user.click(screen.getAllByRole("button", { name: "Copy conversation" })[0]);
+    expect(screen.getByRole("menuitem", { name: "New conversation" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: "New conversation" })).toHaveAttribute("title", "This attack is read-only.");
+    expect(screen.getByRole("menuitem", { name: "This conversation" })).not.toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: "New attack" })).not.toHaveAttribute("aria-disabled", "true");
+  });
+
   it("should render all messages", () => {
     render(
       <TestWrapper>
@@ -62,7 +91,7 @@ describe("MessageList", () => {
     expect(screen.getByText("Can you help me?")).toBeInTheDocument();
   });
 
-  it("should not render system messages as transcript bubbles", () => {
+  it("should keep system messages in the transcript", () => {
     const withSystem: Message[] = [
       {
         role: "system",
@@ -78,7 +107,7 @@ describe("MessageList", () => {
       </TestWrapper>
     );
 
-    expect(screen.queryByText("You are a pirate.")).not.toBeInTheDocument();
+    expect(screen.getByText("You are a pirate.")).toBeInTheDocument();
     expect(screen.getByText("Hello, how are you?")).toBeInTheDocument();
   });
 
@@ -118,7 +147,7 @@ describe("MessageList", () => {
     expect(screen.getByText("Assistant message test")).toBeInTheDocument();
   });
 
-  it("should show persisted scores on a redacted processing error", async () => {
+  it("should show persisted scores with the complete processing error", async () => {
     const user = userEvent.setup();
     const backendMessage: BackendMessage = {
       turn_number: 1,
@@ -148,10 +177,10 @@ describe("MessageList", () => {
       </TestWrapper>
     );
 
-    expect(screen.getByText(/the target could not process this message/i)).toBeInTheDocument();
+    expect(screen.getByText(/Traceback: internal converted diagnostic/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /score false from manualscorer/i }));
     expect(screen.getByText("The target did not answer.")).toBeInTheDocument();
-    expect(screen.queryByText(/Internal original diagnostic|Traceback/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Internal original diagnostic/)).not.toBeInTheDocument();
   });
 
   it("should show the message score and its details when present", async () => {
@@ -1050,6 +1079,7 @@ describe("MessageList", () => {
     expect(screen.queryByTestId("download-btn-0-0")).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId("copy-to-input-btn-0"));
+    await user.click(screen.getByRole("menuitem", { name: "This conversation" }));
     expect(onCopyToInput).toHaveBeenCalledWith(0);
   });
 
@@ -1490,7 +1520,6 @@ describe("MessageList", () => {
   });
 
   it("should render error messages", () => {
-    const onRecover = jest.fn();
     const errorMessages: Message[] = [
       {
         role: "assistant",
@@ -1507,12 +1536,6 @@ describe("MessageList", () => {
       <TestWrapper>
         <MessageList
           messages={errorMessages}
-          processingErrorRecovery={{
-            messageIndex: 0,
-            actionLabel: "Edit in clean conversation",
-            description: "Recovery details",
-            onRecover,
-          }}
         />
       </TestWrapper>
     );
@@ -1521,12 +1544,9 @@ describe("MessageList", () => {
       screen.getByText(/Content was filtered by safety system/)
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /edit in clean conversation/i })).not.toBeInTheDocument();
-    expect(onRecover).not.toHaveBeenCalled();
   });
 
-  it("should render a direct recovery action only for the current processing error", async () => {
-    const user = userEvent.setup();
-    const onRecover = jest.fn();
+  it("should show the full error without a duplicate recovery panel", () => {
     const messages: Message[] = [
       {
         role: "assistant",
@@ -1534,7 +1554,7 @@ describe("MessageList", () => {
         timestamp: new Date().toISOString(),
         error: {
           type: "processing",
-          description: "The target could not process this message.",
+          description: "RuntimeError: target failed\nTraceback (most recent call last):\nFull error details",
         },
       },
     ];
@@ -1543,27 +1563,18 @@ describe("MessageList", () => {
       <TestWrapper>
         <MessageList
           messages={messages}
-          processingErrorRecovery={{
-            messageIndex: 0,
-            actionLabel: "Edit in clean conversation",
-            description:
-              "Continue in a clean conversation so the stored error is not sent back to the target. "
-              + "Your prompt, attachments, and converter choices are preserved for editing.",
-            onRecover,
-          }}
           onCopyToInput={jest.fn()}
         />
       </TestWrapper>
     );
 
     expect(
-      screen.getByText(/prompt, attachments, and converter choices are preserved/i)
+      screen.getByText(/RuntimeError: target failed.*Traceback.*Full error details/)
     ).toBeInTheDocument();
-    expect(screen.getByText(/stored error is not sent back to the target/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Continue in a clean conversation/i)).not.toBeInTheDocument();
     expect(screen.queryByTestId("message-actions-0")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /edit in clean conversation/i }));
-    expect(onRecover).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /edit in clean conversation/i })).not.toBeInTheDocument();
   });
 
   it("should render multiple messages in order", () => {
@@ -1641,7 +1652,7 @@ describe("MessageList", () => {
     expect(screen.getByTestId("download-btn-0-0")).toBeInTheDocument();
   });
 
-  it("should not show action buttons on user messages", () => {
+  it("should allow copying user messages without response download buttons", () => {
     const userMediaMessages: Message[] = [
       {
         role: "user",
@@ -1665,7 +1676,7 @@ describe("MessageList", () => {
       </TestWrapper>
     );
 
-    expect(screen.queryByTestId("copy-to-input-btn-0")).not.toBeInTheDocument();
+    expect(screen.getByTestId("copy-to-input-btn-0")).toBeEnabled();
     expect(screen.queryByTestId("download-btn-0-0")).not.toBeInTheDocument();
   });
 
@@ -1700,6 +1711,7 @@ describe("MessageList", () => {
     );
 
     await user.click(screen.getByTestId("copy-to-input-btn-0"));
+    await user.click(screen.getByRole("menuitem", { name: "This conversation" }));
 
     expect(onCopyToInput).toHaveBeenCalledWith(0);
   });
@@ -1762,42 +1774,6 @@ describe("MessageList", () => {
     expect(openLink).toHaveAttribute("rel", expect.stringContaining("noopener"));
   });
 
-  // -----------------------------------------------------------------------
-  // "Use in new conversation" button
-  // -----------------------------------------------------------------------
-
-  it("should show 'Copy to new conversation' button when callback is provided", () => {
-    const imageMessages: Message[] = [
-      {
-        role: "assistant",
-        content: "",
-        timestamp: new Date().toISOString(),
-        attachments: [
-          {
-            type: "image",
-            name: "output.png",
-            url: "data:image/png;base64,abc",
-            mimeType: "image/png",
-            size: 100,
-          },
-        ],
-      },
-    ];
-
-    render(
-      <TestWrapper>
-        <MessageList
-          messages={imageMessages}
-          onCopyToNewConversation={jest.fn()}
-        />
-      </TestWrapper>
-    );
-
-    expect(
-      screen.getByTestId("copy-to-new-conv-btn-0")
-    ).toBeInTheDocument();
-  });
-
   it("should not show 'Copy to new conversation' button when callback is not provided", () => {
     const imageMessages: Message[] = [
       {
@@ -1825,41 +1801,6 @@ describe("MessageList", () => {
     expect(
       screen.queryByTestId("copy-to-new-conv-btn-0")
     ).not.toBeInTheDocument();
-  });
-
-  it("should call onCopyToNewConversation when button is clicked", async () => {
-    const user = userEvent.setup();
-    const onCopyToNewConversation = jest.fn();
-
-    const imageMessages: Message[] = [
-      {
-        role: "assistant",
-        content: "",
-        timestamp: new Date().toISOString(),
-        attachments: [
-          {
-            type: "image",
-            name: "output.png",
-            url: "data:image/png;base64,abc",
-            mimeType: "image/png",
-            size: 100,
-          },
-        ],
-      },
-    ];
-
-    render(
-      <TestWrapper>
-        <MessageList
-          messages={imageMessages}
-          onCopyToNewConversation={onCopyToNewConversation}
-        />
-      </TestWrapper>
-    );
-
-    await user.click(screen.getByTestId("copy-to-new-conv-btn-0"));
-
-    expect(onCopyToNewConversation).toHaveBeenCalledWith(0);
   });
 
   describe("reasoning summary rendering", () => {
@@ -1917,332 +1858,6 @@ describe("MessageList", () => {
       );
 
       expect(screen.queryByTestId("reasoning-summary")).not.toBeInTheDocument();
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // Branch button
-  // -----------------------------------------------------------------------
-
-  describe("branch button", () => {
-    it("should show branch-attack button on assistant messages when onBranchAttack is provided", () => {
-      const onBranchAttack = jest.fn();
-      render(
-        <TestWrapper>
-          <MessageList messages={mockMessages} onBranchAttack={onBranchAttack} />
-        </TestWrapper>
-      );
-
-      // Branch button should appear on assistant message (index 1) but not user messages
-      expect(screen.getByTestId("branch-attack-btn-1")).toBeInTheDocument();
-      expect(screen.queryByTestId("branch-attack-btn-0")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("branch-attack-btn-2")).not.toBeInTheDocument();
-    });
-
-    it("should not show branch-attack button when onBranchAttack is not provided", () => {
-      render(
-        <TestWrapper>
-          <MessageList messages={mockMessages} />
-        </TestWrapper>
-      );
-
-      expect(screen.queryByTestId("branch-attack-btn-1")).not.toBeInTheDocument();
-    });
-
-    it("should call onBranchAttack with correct index when clicked", async () => {
-      const user = userEvent.setup();
-      const onBranchAttack = jest.fn();
-      render(
-        <TestWrapper>
-          <MessageList messages={mockMessages} onBranchAttack={onBranchAttack} />
-        </TestWrapper>
-      );
-
-      await user.click(screen.getByTestId("branch-attack-btn-1"));
-      expect(onBranchAttack).toHaveBeenCalledWith(1);
-    });
-
-    it("should not show branch-attack button on loading messages", () => {
-      const loadingMessages: Message[] = [
-        {
-          role: "user",
-          content: "Hello",
-          timestamp: new Date().toISOString(),
-        },
-        {
-          role: "assistant",
-          content: "Thinking...",
-          timestamp: new Date().toISOString(),
-          isLoading: true,
-        },
-      ];
-      const onBranchAttack = jest.fn();
-      render(
-        <TestWrapper>
-          <MessageList messages={loadingMessages} onBranchAttack={onBranchAttack} />
-        </TestWrapper>
-      );
-
-      expect(screen.queryByTestId("branch-attack-btn-1")).not.toBeInTheDocument();
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // Branch into new conversation button
-  // -----------------------------------------------------------------------
-
-  describe("branch-conversation button", () => {
-    it("should show branch-conv button on assistant messages when onBranchConversation is provided", () => {
-      const onBranchConversation = jest.fn();
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={mockMessages}
-            onBranchConversation={onBranchConversation}
-          />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTestId("branch-conv-btn-1")).toBeInTheDocument();
-      expect(screen.queryByTestId("branch-conv-btn-0")).not.toBeInTheDocument();
-    });
-
-    it("should call onBranchConversation with correct index when clicked", async () => {
-      const user = userEvent.setup();
-      const onBranchConversation = jest.fn();
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={mockMessages}
-            onBranchConversation={onBranchConversation}
-          />
-        </TestWrapper>
-      );
-
-      await user.click(screen.getByTestId("branch-conv-btn-1"));
-      expect(onBranchConversation).toHaveBeenCalledWith(1);
-    });
-
-    it("should disable branch-conv button when isOperatorLocked", () => {
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={mockMessages}
-            onBranchConversation={jest.fn()}
-            isOperatorLocked={true}
-          />
-        </TestWrapper>
-      );
-
-      const btn = screen.getByTestId("branch-conv-btn-1");
-      expect(btn).toBeDisabled();
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // Disabled-state interactions
-  // -----------------------------------------------------------------------
-
-  describe("disabled states", () => {
-    const assistantMessage: Message[] = [
-      {
-        role: "assistant",
-        content: "Hello from assistant",
-        timestamp: new Date().toISOString(),
-      },
-    ];
-
-    it("should disable copy-to-input when isSingleTurn is true", () => {
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={assistantMessage}
-            onCopyToInput={jest.fn()}
-            isSingleTurn={true}
-          />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTestId("copy-to-input-btn-0")).toBeDisabled();
-    });
-
-    it("should disable copy-to-input when isOperatorLocked is true", () => {
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={assistantMessage}
-            onCopyToInput={jest.fn()}
-            isOperatorLocked={true}
-          />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTestId("copy-to-input-btn-0")).toBeDisabled();
-    });
-
-    it("should disable copy-to-input when isCrossTarget is true", () => {
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={assistantMessage}
-            onCopyToInput={jest.fn()}
-            isCrossTarget={true}
-          />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTestId("copy-to-input-btn-0")).toBeDisabled();
-    });
-
-    it("should disable copy-to-new-conv when isOperatorLocked is true", () => {
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={assistantMessage}
-            onCopyToNewConversation={jest.fn()}
-            isOperatorLocked={true}
-          />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTestId("copy-to-new-conv-btn-0")).toBeDisabled();
-    });
-
-    it("should disable copy-to-new-conv when isCrossTarget is true", () => {
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={assistantMessage}
-            onCopyToNewConversation={jest.fn()}
-            isCrossTarget={true}
-          />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTestId("copy-to-new-conv-btn-0")).toBeDisabled();
-    });
-
-    it("should disable branch-attack button when isSingleTurn is true", () => {
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={assistantMessage}
-            onBranchAttack={jest.fn()}
-            isSingleTurn={true}
-          />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTestId("branch-attack-btn-0")).toBeDisabled();
-    });
-
-    it("should disable branch-conv button when isSingleTurn is true", () => {
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={assistantMessage}
-            onBranchConversation={jest.fn()}
-            isSingleTurn={true}
-          />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTestId("branch-conv-btn-0")).toBeDisabled();
-    });
-
-    it("should not disable branch-attack button when isOperatorLocked or isCrossTarget", () => {
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={assistantMessage}
-            onBranchAttack={jest.fn()}
-            isOperatorLocked={true}
-            isCrossTarget={true}
-          />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTestId("branch-attack-btn-0")).not.toBeDisabled();
-    });
-
-    it("should show copy-to-input on text-only assistant messages (no media required)", () => {
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={assistantMessage}
-            onCopyToInput={jest.fn()}
-          />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTestId("copy-to-input-btn-0")).toBeInTheDocument();
-    });
-
-    it("should disable all action buttons when noTargetSelected is true", () => {
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={assistantMessage}
-            onCopyToInput={jest.fn()}
-            onCopyToNewConversation={jest.fn()}
-            onBranchConversation={jest.fn()}
-            noTargetSelected={true}
-          />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTestId("copy-to-input-btn-0")).toBeDisabled();
-      expect(screen.getByTestId("copy-to-new-conv-btn-0")).toBeDisabled();
-      expect(screen.getByTestId("branch-conv-btn-0")).toBeDisabled();
-    });
-
-    it("should show disabled branch-attack button when noTargetSelected and no onBranchAttack", () => {
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={assistantMessage}
-            noTargetSelected={true}
-          />
-        </TestWrapper>
-      );
-
-      const btn = screen.getByTestId("branch-attack-btn-0");
-      expect(btn).toBeInTheDocument();
-      expect(btn).toBeDisabled();
-    });
-
-    it("should give the four disabled action buttons distinct accessible names", () => {
-      // Regression guard: previously several disabled-state tooltips collapsed
-      // to identical strings (e.g. both branch buttons read
-      // "Cannot branch — target is single-turn"), so a screen reader could
-      // not tell them apart. Each disabled action's accessible name must be
-      // unique.
-      render(
-        <TestWrapper>
-          <MessageList
-            messages={assistantMessage}
-            onCopyToInput={jest.fn()}
-            onCopyToNewConversation={jest.fn()}
-            onBranchConversation={jest.fn()}
-            onBranchAttack={jest.fn()}
-            isSingleTurn={true}
-          />
-        </TestWrapper>
-      );
-
-      const btns = [
-        screen.getByTestId("copy-to-input-btn-0"),
-        screen.getByTestId("copy-to-new-conv-btn-0"),
-        screen.getByTestId("branch-conv-btn-0"),
-        screen.getByTestId("branch-attack-btn-0"),
-      ];
-      const names = btns.map(b => b.getAttribute("aria-label") ?? "");
-      // None empty
-      for (const name of names) {
-        expect(name).not.toBe("");
-      }
-      // All distinct
-      expect(new Set(names).size).toBe(names.length);
     });
   });
 

@@ -251,7 +251,9 @@ function pieceToError(piece: BackendMessagePiece): MessageError | undefined {
     }
     return {
       type: piece.response_error,
-      description: piece.response_error_description || fallbackDescriptions[piece.response_error],
+      description: piece.response_error === 'processing'
+        ? piece.converted_value || piece.original_value || piece.response_error_description || fallbackDescriptions.processing
+        : piece.response_error_description || fallbackDescriptions[piece.response_error],
     }
   }
   return undefined
@@ -275,7 +277,7 @@ export function backendMessageToFrontend(msg: BackendMessage): Message {
     if (pieceError && !error) {
       error = pieceError
     }
-    // Keep scoring evidence without exposing raw reasoning or processing diagnostics.
+    // Error details belong in the error panel, not in editable message content.
     const isProcessingError = pieceError?.type === 'processing'
     if (isProcessingError || isReasoningDataType(piece.converted_value_data_type)) {
       if (!isProcessingError) {
@@ -352,9 +354,9 @@ export function backendMessageToFrontend(msg: BackendMessage): Message {
     }
   }
 
-  const role = ['simulated_assistant', 'assistant', 'tool', 'simulated_tool', 'system'].includes(msg.role)
+  const role = ['simulated_assistant', 'assistant', 'tool', 'simulated_tool', 'system', 'developer'].includes(msg.role)
     ? msg.role
-    : msg.role === 'developer' ? 'system' : 'user'
+    : 'user'
 
   const convertedContent = textParts.join('\n')
   const originalContent = originalTextParts.join('\n')

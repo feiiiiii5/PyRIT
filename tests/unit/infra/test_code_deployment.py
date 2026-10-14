@@ -12,8 +12,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import yaml
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PIPELINES = REPO_ROOT / "infra" / "pipelines"
 SUBSCRIPTION = "11111111-1111-1111-1111-111111111111"
@@ -140,40 +138,61 @@ class TestLocalDockerBuild(unittest.TestCase):
 
 @unittest.skipIf(BASH is None, "Native Bash is not installed")
 class TestPypiBuild(unittest.TestCase):
-    def test_pypi_images_require_an_explicit_coordinated_version(self) -> None:
-        pipeline = yaml.safe_load((REPO_ROOT / ".github/workflows/docker_build.yml").read_text(encoding="utf-8"))
-        steps = pipeline["jobs"]["build-and-test-pypi"]["steps"]
-        selection = next(step for step in steps if step.get("id") == "pypi-version")
-        assert selection["env"]["PYRIT_PYPI_VERSION"] == "${{ inputs.pypiVersion || vars.PYRIT_PYPI_VERSION }}"
-        assert "pip index" not in selection["run"]
-        assert "0.10.0" not in selection["run"]
-        assert BASH is not None
+    def test_pypi_builds_preserve_installed_package_provenance_and_remove_local_sources(self) -> None:
+        dockerfile = (REPO_ROOT / "docker/Dockerfile").read_text(encoding="utf-8")
+        pypi_build = dockerfile.split('if [ "$PYRIT_SOURCE" = "pypi" ]; then', 1)[1].split(
+            'elif [ "$PYRIT_SOURCE" = "local" ]; then', 1
+        )[0]
+        assert "==$PYRIT_VERSION" in pypi_build
+        assert "rm -rf /app/pyrit /app/frontend /app/build_scripts" in pypi_build
+        assert "stamp" not in pypi_build
+        assert "prepare_package" not in pypi_build
 
-        for version, valid in (
-            ("1.2.0", True),
-            ("1.2.0.dev0", True),
-            ("1.2.0rc1", True),
-            ("", False),
-            ("latest", False),
-            ("1.2.0\nGIT_MODIFIED=false", False),
-            ("1.2.0 --extra-index-url=https://example.com", False),
-        ):
-            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
-                output = Path(directory) / "github-output"
+    def test_pypi_compatibility_validation_fails_closed_with_a_release_diagnostic(self) -> None:
+        assert BASH is not None
+        dockerfile = (REPO_ROOT / "docker/Dockerfile").read_text(encoding="utf-8")
+        validation = dockerfile.split("    cd /tmp && \\\n", 1)[1].split('    echo "Creating build info..."', 1)[0]
+        validation = validation.replace("/opt/venv/bin/python", shlex.quote(Path(sys.executable).as_posix()))
+        version = "9.9.9"
+        identity = f"{version}+g{'a' * 40}"
+
+        for state in ("legacy", "missing-stamp", "malformed-stamp", "stamped"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                package = root / "pyrit"
+                package.mkdir()
+                (package / "__init__.py").write_text("from ._version import __version__\n", encoding="utf-8")
+                (package / "_version.py").write_text(f"__version__ = {version!r}\n", encoding="utf-8")
+                if state != "legacy":
+                    shutil.copyfile(REPO_ROOT / "pyrit/_compatibility.py", package / "_compatibility.py")
+                if state in ("malformed-stamp", "stamped"):
+                    stamp = {
+                        "version": version if state == "stamped" else "9.9.8",
+                        "commit": "a" * 40,
+                        "compatibility_id": identity,
+                        "dirty": False,
+                    }
+                    (package / "_compatibility.json").write_text(json.dumps(stamp), encoding="utf-8")
+                environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
                 result = subprocess.run(
                     [BASH, "--noprofile", "--norc", "-s"],
-                    input=selection["run"],
+                    input="set -eu\n" + validation + "true\n",
+                    cwd=root,
                     text=True,
                     capture_output=True,
                     check=False,
                     timeout=30,
-                    env={**os.environ, "PYRIT_PYPI_VERSION": version, "GITHUB_OUTPUT": output.as_posix()},
+                    env={**environment, "PYRIT_SOURCE": "pypi", "PYRIT_VERSION": version},
                 )
-                assert (result.returncode == 0) == valid, result.stdout + result.stderr
-                if valid:
-                    assert output.read_text().strip() == f"version={version}"
+                if state == "stamped":
+                    assert result.returncode == 0, result.stdout + result.stderr
+                    assert result.stdout.strip() == identity
+                    assert result.stderr == ""
                 else:
-                    assert not output.exists()
+                    assert result.returncode != 0
+                    assert f"Selected PyPI release {version} lacks valid compatibility metadata" in result.stderr
+                    assert "Wheels published before compatibility stamping are unsupported" in result.stderr
+                    assert "matching Python and frontend stamps is required" in result.stderr
 
 
 @unittest.skipIf(BASH is None or JQ is None, "Native Bash and jq are required")
@@ -442,6 +461,163 @@ wait_for_http_health https://copyrit.example.azurefd.net/api/health 31
             assert 0 < int(request[request.index("--max-time") + 1]) <= 30
         if len(requests) == 2:
             assert requests[1][requests[1].index("--max-time") + 1] == "1"
+
+    def test_runtime_readiness_requires_expected_revision_and_consistent_status(self) -> None:
+        revision = "copyrit-test--new"
+        legacy_health = {"status": "healthy", "timestamp": "2026-10-12T17:28:40+00:00", "service": "pyrit-backend"}
+        ready = legacy_health | {"revision": revision, "state": "ready", "ready": True}
+        cases = [
+            ("200", ready, 0, True, False),
+            ("200", ready | {"state": "initializing", "ready": False}, 0, False, False),
+            ("200", ready | {"state": "failed", "ready": False}, 0, False, True),
+            ("200", ready | {"state": "restart-required", "ready": False}, 0, False, True),
+            ("200", ready | {"state": "stopping", "ready": False}, 0, False, True),
+            ("200", ready | {"revision": "copyrit-test--old"}, 0, False, False),
+            (
+                "200",
+                ready | {"revision": "copyrit-test--old", "state": "failed", "ready": False},
+                0,
+                False,
+                False,
+            ),
+            ("200", ready | {"state": "failed"}, 0, False, False),
+            ("200", ready | {"ready": "true"}, 0, False, False),
+            ("200", ready | {"revision": None}, 0, False, False),
+            ("200", ready | {"revision": ""}, 0, False, False),
+            ("200", {"revision": revision, "state": "ready"}, 0, False, False),
+            ("200", legacy_health, 0, False, False),
+            ("503", ready, 0, False, False),
+            ("503", ready | {"state": "failed", "ready": False}, 0, False, False),
+            ("200", "private malformed response", 0, False, False),
+            ("200", json.dumps(ready) + "\n" + json.dumps(ready), 0, False, False),
+            ("404", ready, 0, False, False),
+            ("302", ready, 0, False, False),
+            ("200", ready, 28, False, False),
+            (
+                "200",
+                ready | {"state": "failed", "ready": False, "message": "private exception details"},
+                0,
+                False,
+                True,
+            ),
+        ]
+        for status, payload, curl_exit, succeeds, terminal in cases:
+            body = payload if isinstance(payload, str) else json.dumps(payload)
+            with self.subTest(status=status, payload=payload, curl_exit=curl_exit):
+                result = self._run(
+                    script="deployment_common.sh",
+                    command=f"""
+curl() {{
+  printf 'request:' >&2; printf '%q ' "$@" >&2; printf '\\n' >&2
+  printf '%s\\n%s' {shlex.quote(body)} {status}
+  return {curl_exit}
+}}
+sleep() {{ SECONDS=$((SECONDS + $1)); }}
+wait_for_runtime_readiness https://copyrit.example.azurefd.net/api/health {revision} 6
+""",
+                )
+                assert (result.returncode == 0) == succeeds, result.stdout + result.stderr
+                requests = [line for line in result.stderr.splitlines() if line.startswith("request:")]
+                assert len(requests) <= 2
+                if terminal:
+                    assert len(requests) == 1
+                    assert "Runtime state is " in result.stdout
+                    assert "Timed out" not in result.stdout
+                if not succeeds:
+                    assert f"PyRIT runtime readiness failed for revision {revision}" in result.stdout
+                    assert f"--revision {revision}" in result.stdout
+                    assert "az containerapp logs show" in result.stdout
+                    assert "Azure Portal -> Container App copyrit-test -> Monitoring -> Log stream" in result.stdout
+                    assert f"select revision {revision} and console logs" in result.stdout
+                    assert "Monitoring -> Logs" in result.stdout
+                assert "private malformed response" not in result.stdout
+                assert "private exception details" not in result.stdout
+
+    def test_runtime_readiness_waits_for_new_revision_and_initialization(self) -> None:
+        responses = [
+            {"revision": "copyrit-test--old", "state": "ready", "ready": True},
+            {"revision": "copyrit-test--new", "state": "initializing", "ready": False},
+            {"revision": "copyrit-test--new", "state": "ready", "ready": True},
+        ]
+        result = self._run(
+            script="deployment_common.sh",
+            command=f"""
+curl() {{
+  printf 'request:' >&2; printf '%q ' "$@" >&2; printf '\\n' >&2
+  case "$attempt" in
+    1) printf '%s\\n200' {shlex.quote(json.dumps(responses[0]))};;
+    2) printf '%s\\n200' {shlex.quote(json.dumps(responses[1]))};;
+    *) printf '%s\\n200' {shlex.quote(json.dumps(responses[2]))};;
+  esac
+}}
+sleep() {{ SECONDS=$((SECONDS + $1)); }}
+wait_for_runtime_readiness https://copyrit.example.azurefd.net/api/health copyrit-test--new 20
+""",
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stderr.count("request:") == 3
+        assert "received copyrit-test--old" in result.stdout
+        assert "Runtime state is initializing" in result.stdout
+        assert "PyRIT runtime is ready on revision copyrit-test--new." in result.stdout
+
+    def test_runtime_readiness_caps_requests_and_sleep_to_remaining_budget(self) -> None:
+        result = self._run(
+            script="deployment_common.sh",
+            command="""
+curl() { printf 'request:' >&2; printf '%q ' "$@" >&2; printf '\\n' >&2; printf '\\n504'; }
+sleep() { printf 'sleep:%s\\n' "$1" >&2; SECONDS=$((SECONDS + $1)); }
+wait_for_runtime_readiness https://copyrit.example.azurefd.net/api/health copyrit-test--new 31
+""",
+        )
+        assert result.returncode != 0
+        requests = [
+            shlex.split(line.removeprefix("request:"))
+            for line in result.stderr.splitlines()
+            if line.startswith("request:")
+        ]
+        sleeps = [int(line.removeprefix("sleep:")) for line in result.stderr.splitlines() if line.startswith("sleep:")]
+        assert 1 <= len(requests) <= 7
+        assert 30 <= sum(sleeps) <= 31
+        assert all(0 < duration <= 5 for duration in sleeps)
+        for request in requests:
+            assert "--location" not in request and "--insecure" not in request
+            assert 0 < int(request[request.index("--max-time") + 1]) <= 30
+            assert request[request.index("--header") + 1] == "Cache-Control: no-cache"
+        assert "Timed out after 31s" in result.stdout
+
+    def test_app_deployment_requires_runtime_readiness_before_reporting_success(self) -> None:
+        for runtime_exit in (0, 1):
+            with self.subTest(runtime_exit=runtime_exit):
+                result = self._run(
+                    script="deploy_app.sh",
+                    inputs=APP_INPUTS,
+                    command=f"""
+validate_app_inputs() {{ :; }}
+initialize_deployment_scope() {{ :; }}
+read_existing_topology() {{ :; }}
+read_app_access_mode() {{ expected_public_access=Disabled; }}
+build_app_parameters() {{
+  deployment_name=test
+  template_file=test
+  parameters=("testParameter=testValue")
+  immutable_image=test
+}}
+preview_deployment() {{ :; }}
+az() {{ :; }}
+verify_readiness() {{
+  health_url=https://copyrit.example.azurefd.net/api/health
+  revision=copyrit-test--new
+  egress_ip=192.0.2.1
+  printf 'liveness-check\\n'
+}}
+wait_for_runtime_readiness() {{ printf 'runtime-check:%s:%s:%s\\n' "$@"; return {runtime_exit}; }}
+main
+""",
+                )
+                assert (result.returncode == 0) == (runtime_exit == 0), result.stdout + result.stderr
+                expected_check = "runtime-check:https://copyrit.example.azurefd.net/api/health:copyrit-test--new:300"
+                assert expected_check in result.stdout
+                assert ("Deployment healthy:" in result.stdout) == (runtime_exit == 0)
 
     def _run_cancellation_rollback(
         self, *, removed: bool, signal: str

@@ -20,13 +20,17 @@ from typing import TYPE_CHECKING, Any
 
 from pyrit.common.utils import to_sha256
 from pyrit.executor.attack import AttackExecutor, AttackExecutorResult
-from pyrit.executor.attack.core.attack_result_attribution import AttackResultAttribution
+from pyrit.executor.attack.core.attack_result_attribution import (
+    AttackResultAttribution,
+    enrich_attack_result_identifier_async,
+)
 from pyrit.memory import CentralMemory
 from pyrit.models import (
     AtomicAttackEvaluationIdentifier,
     AtomicAttackIdentifier,
     AttackResult,
     AttackSeedGroup,
+    ScenarioRunPlanGroupKind,
     config_hash,
 )
 
@@ -65,6 +69,7 @@ class AtomicAttack:
         adversarial_chat: PromptTarget | None = None,
         objective_scorer: TrueFalseScorer | None = None,
         memory_labels: dict[str, str] | None = None,
+        group_kind: ScenarioRunPlanGroupKind = ScenarioRunPlanGroupKind.ATTACK,
         **attack_execute_params: Any,
     ) -> None:
         """
@@ -88,6 +93,10 @@ class AtomicAttack:
             objective_scorer: Optional scorer for evaluating simulated
                 conversations.
             memory_labels: Additional labels to apply to prompts.
+            group_kind: What this group runs, recorded in the scenario's run plan.
+                ``build_baseline_atomic_attack`` passes ``BASELINE`` and Adaptive
+                scenarios pass ``ADAPTIVE``. It describes the group and does not
+                change its identity or what it executes.
             **attack_execute_params: Additional parameters to pass to the attack
                 execution method.
 
@@ -98,6 +107,7 @@ class AtomicAttack:
         self.atomic_attack_name = atomic_attack_name
         self.display_group = display_group or atomic_attack_name
         self._technique_name = technique_name
+        self._group_kind = group_kind
 
         self._attack_technique = attack_technique
 
@@ -186,6 +196,11 @@ class AtomicAttack:
     def technique_name(self) -> str | None:
         """Catalog name of the technique that built this attack."""
         return self._technique_name
+
+    @property
+    def group_kind(self) -> ScenarioRunPlanGroupKind:
+        """What this group runs, as recorded in the scenario's run plan."""
+        return self._group_kind
 
     @property
     def technique_eval_hash(self) -> str:
@@ -396,6 +411,7 @@ class AtomicAttack:
                 completed_results=completed_results,
                 incomplete_objectives=untyped_results.incomplete_objectives,
                 input_indices=untyped_results.input_indices,
+                incomplete_result_ids=untyped_results.incomplete_result_ids,
             )
 
             # Enrich atomic_attack_identifier with seed identifiers
@@ -435,21 +451,9 @@ class AtomicAttack:
 
         for result, idx in zip(results.completed_results, results.input_indices, strict=True):
             if idx < len(self._seed_groups):
-                identifier = AtomicAttackIdentifier.build(
+                await enrich_attack_result_identifier_async(
+                    result=result,
                     technique_identifier=self._attack_technique.get_identifier(),
                     seed_group=self._seed_groups[idx],
+                    memory=memory,
                 )
-
-                # Persist the enriched identifier back to the database.
-                # Stamp eval_hash so it lands in the stored JSON for DB-level filtering.
-                identifier = identifier.with_eval_hash(AtomicAttackEvaluationIdentifier(identifier).eval_hash)
-
-                result.atomic_attack_identifier = identifier
-
-                if result.attack_result_id:
-                    (
-                        await memory.update_attack_result_by_id_async(
-                            attack_result_id=result.attack_result_id,
-                            update_fields={"atomic_attack_identifier": identifier.model_dump()},
-                        )
-                    )

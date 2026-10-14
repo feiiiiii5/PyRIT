@@ -1,10 +1,23 @@
 import { makeStyles, tokens } from '@fluentui/react-components'
 import { mobileTouchTarget, mobileTouchTargetHeight } from '../../styles/touchTargets'
 
-export const useChatInputAreaStyles = makeStyles({
+export const usePromptEditorStyles = makeStyles({
   root: {
     padding: `${tokens.spacingVerticalXL} ${tokens.spacingHorizontalXXL}`,
     backgroundColor: tokens.colorNeutralBackground2,
+  },
+  editRoot: {
+    padding: 0,
+    backgroundColor: 'transparent',
+  },
+  editHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM} 0`,
+  },
+  hiddenInput: {
+    display: 'none',
   },
   inputContainer: {
     display: 'flex',
@@ -12,6 +25,40 @@ export const useChatInputAreaStyles = makeStyles({
     gap: tokens.spacingVerticalM,
     maxWidth: '900px',
     margin: '0 auto',
+  },
+  composerTrigger: {
+    position: 'relative',
+  },
+  disabledComposerOverlay: {
+    position: 'absolute',
+    inset: 0,
+    cursor: 'help',
+  },
+  disabledReasonsPopover: {
+    maxWidth: '420px',
+  },
+  disabledReasonsHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    color: tokens.colorNeutralForeground3,
+    paddingBottom: tokens.spacingVerticalS,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  disabledReasonsList: {
+    listStyleType: 'none',
+    padding: 0,
+    margin: 0,
+  },
+  disabledReason: {
+    paddingTop: tokens.spacingVerticalS,
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase300,
+    ':not(:last-child)': {
+      paddingBottom: tokens.spacingVerticalS,
+      borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    },
   },
   attachmentsContainer: {
     display: 'flex',

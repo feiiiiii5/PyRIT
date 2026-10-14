@@ -103,7 +103,10 @@ export interface ChatConverterController {
   clear: (pieceId: string) => void
   clearAll: () => void
   editConvertedValue: (pieceId: string, value: string) => void
-  restore: (text: string, attachments: MessageAttachment[], conversions: Record<string, PieceConversion>) => void
+  restore: (
+    text: string, attachments: MessageAttachment[], conversions: Record<string, PieceConversion>,
+    pipelines?: Record<string, ConverterPipelineStage[]>,
+  ) => void
 }
 
 export interface MessageTextDisplayPiece {
@@ -131,7 +134,7 @@ export interface MessageMediaDisplayPiece {
 export type MessageDisplayPiece = MessageTextDisplayPiece | MessageMediaDisplayPiece
 
 export interface Message {
-  role: 'user' | 'assistant' | 'simulated_assistant' | 'tool' | 'simulated_tool' | 'system'
+  role: 'user' | 'assistant' | 'simulated_assistant' | 'tool' | 'simulated_tool' | 'system' | 'developer'
   content: string
   timestamp: string
   /**
@@ -363,6 +366,53 @@ export interface CreateConverterRequest {
   params?: Record<string, unknown>
 }
 
+export interface TechniqueInstance {
+  name: string
+  description?: string | null
+  attack_type: string
+  tags: string[]
+  uses_adversarial: boolean
+  uses_default_adversarial_target: boolean
+  /** Supplied factory creation inputs, with live component credentials omitted. */
+  creation_statement: string
+}
+
+export interface TechniqueTypeEntry {
+  attack_type: string
+  description: string
+  parameters: Parameter[]
+  supports_adversarial: boolean
+  supports_converters: boolean
+}
+
+export interface TechniqueListResponse {
+  items: TechniqueInstance[]
+  pagination: PaginationInfo
+}
+
+export interface TechniqueTypeResponse {
+  items: TechniqueTypeEntry[]
+}
+
+export interface CreateTechniqueRequest {
+  name: string
+  description?: string
+  tags: string[]
+  type: string
+  params: Record<string, unknown>
+  request_converters?: string[]
+  response_converters?: string[]
+  adversarial_chat?: string
+  adversarial_system_prompt?: string
+  adversarial_seed_prompt?: string
+  adversarial_prompt_template?: string
+}
+
+export interface RegistryReferenceOption {
+  name: string
+  type: string
+}
+
 export interface Parameter {
   name: string
   type_name: string
@@ -374,6 +424,12 @@ export interface Parameter {
   /** Structured input variants mapped to their constructor parameters. */
   variants?: Record<string, Parameter[]> | null
   reference_type?: 'target' | 'converter' | 'scorer' | 'scenario' | null
+  /** Whether parameter controls must obscure the entered value. */
+  sensitive?: boolean
+  /** Whether parameter controls must preserve line breaks in the entered value. */
+  multiline?: boolean
+  /** Whether the value must be omitted when identity-based authentication is selected. */
+  identity_conflicting?: boolean
   description?: string | null
 }
 
@@ -394,6 +450,8 @@ export interface ConverterPreviewRequest {
   original_value: string
   converter_ids: string[]
   original_value_data_type?: string
+  start_token?: string
+  end_token?: string
 }
 
 /** One converter stage of a `/converters/preview` pipeline run. */
@@ -436,6 +494,7 @@ export interface TargetInfo {
 
 export type AttackTargetResolutionStatus =
   | 'idle'
+  | 'unbound'
   | 'loading'
   | 'resolved'
   | 'explicit-mismatch'
@@ -453,6 +512,7 @@ export interface AttackSummary {
   attack_specific_params?: Record<string, unknown> | null
   objective: string
   target?: TargetInfo | null
+  target_unbound?: boolean
   converters: string[]
   outcome?: AttackOutcome | null
   automated_score?: BackendScore | null
@@ -475,7 +535,7 @@ export interface AttackSummary {
 }
 
 export interface CreateAttackRequest {
-  target_registry_name: string
+  target_registry_name?: string
   name?: string
   operator?: string
   operation?: string
@@ -489,6 +549,59 @@ export interface CreateAttackRequest {
 export interface UpdateAttackRequest {
   outcome?: 'undetermined' | 'success' | 'failure' | 'error'
   objective?: string
+  expected_objective?: string
+}
+
+export type ConversationDraftRole = 'system' | 'user' | 'simulated_assistant' | 'simulated_tool' | 'developer'
+
+export interface ConversationDraftPiece extends MessagePieceRequest {
+  readonly draftId: string
+  previewUrl?: string
+  filename?: string
+  file?: File
+}
+
+export interface ConversationSaveInput {
+  messages: ConversationDraftMessage[]
+  objective: string
+  initialObjective: string
+  target: TargetInstance | null
+  sourceAttackId: string | null
+  sourceConversationId: string | null
+  labels?: Record<string, string>
+}
+
+export interface NewAttackContext {
+  generation: string
+  ready: boolean
+  labels?: Record<string, string>
+}
+
+export interface ConvertedFileChip {
+  name: string
+  url: string
+  iconKind: 'image' | 'audio' | 'video' | 'file'
+}
+
+export interface ConversationDraftMessage extends MessageRequest {
+  readonly id: string
+  role: ConversationDraftRole
+  pieces: ConversationDraftPiece[]
+}
+
+export interface SaveConversationRequest {
+  save_id: string
+  destination: 'same_attack' | 'new_attack'
+  attack_result_id?: string
+  source_attack_result_id?: string
+  source_conversation_id?: string
+  expected_objective?: string
+  objective?: string
+  target_registry_name?: string
+  operator?: string
+  operation?: string
+  labels?: Record<string, string>
+  messages: MessageRequest[]
 }
 
 export interface CreateAttackResponse {
@@ -591,13 +704,16 @@ export interface MessagePieceRequest {
   applied_converter_ids?: string[]
   mime_type?: string
   original_prompt_id?: string
+  source_piece_id?: string
   prompt_metadata?: Record<string, unknown>
 }
 
-export interface PrependedMessageRequest {
+export interface MessageRequest {
   role: string // 'system' | 'user' | 'assistant'
   pieces: MessagePieceRequest[]
 }
+
+export type PrependedMessageRequest = MessageRequest
 
 /**
  * Ordered converter stack applied to specific pieces of a message.
@@ -610,14 +726,14 @@ export interface ConverterConfigurationRequest {
   prompt_data_types_to_apply?: string[]
 }
 
-export interface AddMessageRequest {
-  role: string
-  pieces: MessagePieceRequest[]
+export interface AddMessageRequest extends MessageRequest {
   send: boolean
   target_registry_name?: string
   converter_ids?: string[]
   request_converter_configurations?: ConverterConfigurationRequest[]
   response_converter_configurations?: ConverterConfigurationRequest[]
+  start_token?: string
+  end_token?: string
   target_conversation_id: string
 }
 
@@ -633,20 +749,34 @@ export interface AddMessageResponse {
   messages: ConversationMessagesResponse
 }
 
+export type RepeatConversionMode = 'shared' | 'per_branch'
+
 export interface MessageSendRequest extends AddMessageRequest {
   send: true
   target_registry_name: string
   submission_id: string
+  count?: number
+  request_converter_mode?: RepeatConversionMode
 }
 
-export interface MessageSendStatus {
-  send_id: string
-  attack_result_id: string
+export interface MultiSendOptions {
+  count: number
+  requestConverterMode: RepeatConversionMode
+}
+
+export interface MessageSendConversation {
   conversation_id: string
   request_turn_number: number | null
   state: 'queued' | 'preparing' | 'sending' | 'finalizing' | 'completed' | 'failed' | 'interrupted'
   error: string | null
   failure_stage: 'preparation' | 'sending' | 'finalization' | 'interrupted' | null
+}
+
+export interface MessageSendStatus extends MessageSendConversation {
+  send_id: string
+  attack_result_id: string
+  count?: number
+  conversations?: MessageSendConversation[]
 }
 
 export interface AttackListResponse {
@@ -685,9 +815,183 @@ export interface ChangeMainConversationResponse {
   conversation_id: string
 }
 
+/**
+ * Wire shape of `DatasetInfo` from `GET /api/datasets`.
+ * Null counts mean the total is unknown, not zero.
+ */
+export interface DatasetInfo {
+  name: string
+  selection_key: string
+  loaded: boolean
+  provider_available: boolean
+  origins?: string[]
+  logical_examples: number | null
+  seed_pieces: number | null
+  objectives: number | null
+  modalities: string[]
+  harm_categories: string[]
+  has_unlabeled_harm_categories: boolean
+}
+
+/** Wire shape of `DatasetListResponse` from `GET /api/datasets`. */
+export interface DatasetListResponse {
+  items: DatasetInfo[]
+}
+
+/** Stored seed kinds accepted by the dataset seed browser. */
+export type SeedType = 'prompt' | 'objective' | 'simulated_conversation'
+
+/** Stored prompt data types. Media path values are not played by the browser. */
+export type PromptDataType =
+  | 'text'
+  | 'image_path'
+  | 'audio_path'
+  | 'video_path'
+  | 'binary_path'
+  | 'url'
+  | 'reasoning'
+  | 'error'
+  | 'function_call'
+  | 'tool_call'
+  | 'function_call_output'
+
+export type ChatMessageRole =
+  | 'system'
+  | 'user'
+  | 'assistant'
+  | 'simulated_assistant'
+  | 'tool'
+  | 'simulated_tool'
+  | 'developer'
+
+/** How a seed entered memory. Unknown stays unknown; it is not inferred. */
+export type SeedOrigin = 'local' | 'remote' | 'generated' | 'user' | 'unknown'
+
+/** One typed objective condition. Extra fields stay on the object for inspection. */
+export interface SeedCondition {
+  condition_type: string
+  [key: string]: unknown
+}
+
+/**
+ * Wire shape of `SeedRecord` from the seed-example detail endpoint.
+ * This is stored inspection data, not an executable seed.
+ */
+export interface SeedRecord {
+  id: string
+  seed_type: SeedType
+  value: string
+  value_sha256: string | null
+  data_type: PromptDataType
+  name: string | null
+  dataset_name: string | null
+  origin: SeedOrigin
+  harm_categories: string[] | null
+  description: string | null
+  authors: string[] | null
+  groups: string[] | null
+  source: string | null
+  date_added: string
+  added_by: string
+  metadata: Record<string, unknown> | null
+  prompt_group_id: string | null
+  sequence: number | null
+  role: ChatMessageRole | null
+  parameters: string[] | null
+  conditions: SeedCondition[] | null
+  response_json_schema: Record<string, unknown> | null
+}
+
+/** Wire shape of one logical example from `GET /api/datasets/seeds`. */
+export interface SeedExampleSummary {
+  example_id: string
+  name: string | null
+  preview: string
+  preview_truncated: boolean
+  modalities: string[]
+  seed_types: string[]
+  piece_count: number
+  objective_count: number
+  harm_categories: string[]
+  has_unlabeled_harm: boolean
+}
+
+/** Wire shape of `SeedExampleListResponse`. `total` counts matching examples. */
+export interface SeedExampleListResponse {
+  items: SeedExampleSummary[]
+  pagination: PaginationInfo
+  total: number
+}
+
+/** Wire shape of `SeedExampleDetailResponse`, including stored members in server order. */
+export interface SeedExampleDetailResponse extends SeedExampleSummary {
+  members: SeedRecord[]
+}
+
+/** Query for `GET /api/datasets/seeds`. Facet arrays are repeated singular parameters. */
+export interface SeedExampleListParams {
+  selection_key: string
+  limit?: number
+  cursor?: string
+  search?: string
+  modality?: readonly string[]
+  seed_type?: readonly SeedType[]
+  harm_category?: readonly string[]
+}
+
 // --- Scenarios ---
 
+export type ScenarioDatasetLimit = number | 'all' | 'default'
+export type DatasetFetchPolicy = 'never' | 'if_missing'
+
+export interface ScenarioDatasetSourceInput {
+  name: string
+  max_size?: ScenarioDatasetLimit | null
+  fetch?: DatasetFetchPolicy | 'default' | null
+}
+
+export interface ScenarioDatasetRequest {
+  sources?: ScenarioDatasetSourceInput[] | null
+  max_per_dataset?: ScenarioDatasetLimit | null
+  max_total?: ScenarioDatasetLimit | null
+  fetch?: DatasetFetchPolicy | 'default' | null
+  filters?: Record<string, string[]> | null
+}
+
+export interface ScenarioDatasetOptions {
+  mode: 'any' | 'subset' | 'fixed'
+  allowed_names: string[]
+  max_selected?: number | null
+  per_dataset_limit: boolean
+  total_limit: boolean
+  supports_overrides: boolean
+  filters: boolean
+  source_settings?: boolean
+}
+
+export interface ScenarioDatasetSourceSettings {
+  name: string
+  max_size: number | 'all'
+  fetch: DatasetFetchPolicy
+  configured_provider: boolean
+}
+
+export interface ScenarioDatasetSettings {
+  sources: ScenarioDatasetSourceSettings[]
+  max_per_dataset: number | 'all'
+  max_total: number | 'all'
+  fetch: DatasetFetchPolicy
+  filters: Record<string, string[]>
+}
+
+export interface ScenarioDatasetLoadResponse {
+  settings: ScenarioDatasetSettings
+  items: DatasetInfo[]
+}
+
 export interface RegisteredScenario {
+  /** Maximum resolved concrete techniques, excluding baseline. Omitted/null means unrestricted. */
+  max_concrete_techniques?: number | null
   scenario_name: string
   scenario_type: string
   scenario_version: number
@@ -700,10 +1004,14 @@ export interface RegisteredScenario {
   all_techniques: string[]
   technique_summaries: ScenarioTechniqueSummary[]
   default_datasets: string[]
+  dataset_options?: ScenarioDatasetOptions
+  dataset_defaults?: ScenarioDatasetSettings
   baseline_policy: 'enabled' | 'disabled' | 'forbidden'
   include_baseline_by_default: boolean
   uses_default_adversarial_target: boolean
   supported_parameters: Parameter[]
+  /** All declared names, including opaque inputs with dedicated controls. */
+  supported_parameter_names: string[]
   default_run_size: ScenarioRunSizeEstimateResponse
 }
 
@@ -720,13 +1028,14 @@ export interface ListRegisteredScenariosResponse {
 
 export interface RunScenarioRequest {
   scenario_name: string
-  target_name: string
+  target_name?: string | null
   adversarial_target_name?: string | null
   initializers?: string[] | null
   techniques?: string[] | null
   dataset_names?: string[] | null
-  max_dataset_size?: number | null
+  max_dataset_size?: number | 'all' | 'default' | '' | null
   dataset_filters?: Record<string, string[]> | null
+  datasets?: ScenarioDatasetRequest
   max_concurrency?: number
   max_retries?: number
   include_baseline?: boolean | null
@@ -772,6 +1081,9 @@ export interface ScenarioRunSizeEstimateResponse {
   status?: 'exact' | 'approximate' | 'conditional' | 'unavailable'
   dataset_size: ScenarioDatasetSizeEstimate
   dataset_limit: DatasetLimitInput
+  dataset_options?: ScenarioDatasetOptions
+  dataset_defaults?: ScenarioDatasetSettings
+  effective_datasets?: ScenarioDatasetSettings
   estimated_attack_count: number | null
   minimum_attack_count?: number | null
   maximum_attack_count?: number | null
@@ -786,8 +1098,9 @@ export interface ScenarioRunSizeEstimateRequest {
   adversarial_target_name?: string | null
   techniques?: string[] | null
   dataset_names?: string[] | null
-  max_dataset_size?: number | null
+  max_dataset_size?: number | 'all' | 'default' | '' | null
   dataset_filters?: Record<string, string[]> | null
+  datasets?: ScenarioDatasetRequest
   include_baseline?: boolean | null
   scenario_params?: Record<string, unknown> | null
 }
