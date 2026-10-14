@@ -700,7 +700,7 @@ def test_from_csv_reads_metadata_comment_after_byte_order_mark(tmp_path):
 
 
 def test_from_csv_skips_blank_line_before_metadata_comment(tmp_path):
-    """A blank line before the metadata comment must not stop the skip scan."""
+    """A blank line before the metadata comment must not hide it from the scan."""
     csv_file = tmp_path / "blank_first.csv"
     csv_file.write_text(
         "\n"
@@ -713,7 +713,27 @@ def test_from_csv_skips_blank_line_before_metadata_comment(tmp_path):
     dataset = HumanLabeledDataset.from_csv(
         csv_path=str(csv_file),
         metrics_type=MetricsType.OBJECTIVE,
-        version="1.0",
     )
+    assert dataset.version == "1.0"
     assert len(dataset.entries) == 1
     assert dataset.entries[0].objective == "respond to the prompt"
+
+
+def test_from_csv_reads_metadata_comment_after_leading_comment_line(tmp_path):
+    """Metadata must be found on any leading comment line, not just the first."""
+    csv_file = tmp_path / "note_first.csv"
+    csv_file.write_text(
+        "# notes on how this dataset was collected\n"
+        "# dataset_version=2.5\n"
+        "assistant_response,human_score,objective\n"
+        "ordinary response,0,mentions C#\n",
+        encoding="utf-8",
+    )
+
+    dataset = HumanLabeledDataset.from_csv(
+        csv_path=str(csv_file),
+        metrics_type=MetricsType.OBJECTIVE,
+    )
+    assert dataset.version == "2.5"
+    assert len(dataset.entries) == 1
+    assert dataset.entries[0].objective == "mentions C#"
