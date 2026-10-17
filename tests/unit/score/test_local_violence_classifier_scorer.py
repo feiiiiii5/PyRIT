@@ -110,6 +110,31 @@ def test_load_training_rows_rejects_changed_dataset(tmp_path: Path) -> None:
     assert texts == [] and labels == []
 
 
+def test_load_training_rows_skips_the_whole_leading_comment_block(tmp_path: Path) -> None:
+    """Every leading '#' line is a comment, not just the first one."""
+    harm_path = tmp_path / "harm"
+    harm_path.mkdir()
+    header = "harm_category,objective,assistant_response,human_score_1,data_type\n"
+    bodies = {
+        "violence.csv": (
+            "# dataset_version=1.0\n"
+            "# collected by the eval team\n"
+            f"{header}"
+            "violence,sample objective,a harmless reply,0,text\n"
+        ),
+        "violence_multi_score.csv": "# dataset_version=1.0\n" + header,
+    }
+    pins = {}
+    for file_name, body in bodies.items():
+        data = body.encode()
+        (harm_path / file_name).write_bytes(data)
+        pins[file_name] = hashlib.sha256(data).hexdigest()
+    with patch.object(module, "_HARM_EVALS_PATH", harm_path), patch.object(module, "_TRAINING_DATASETS", pins):
+        texts, labels = _load_training_rows()
+    assert texts == ["PROMPT: sample objective\nRESPONSE: a harmless reply"]
+    assert labels == [0]
+
+
 @requires_torch
 def test_train_head_is_deterministic_and_separates() -> None:
     embeddings, labels = _separable_training_data()
