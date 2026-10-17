@@ -78,6 +78,12 @@ CI workers. These are deadlock backstops, not expected runtimes. Production dead
 are unchanged. Deadline and cancellation tests use explicit controls and keep their
 separate timing assertions.
 
+The discovery provider-state test and Copilot cancellation-test startup use the
+shared `TEST_WATCHDOG_SECONDS` backstop in `tests/unit/async_utils.py`. Discovery
+timeout coverage expires the real cancellation path only after the request starts.
+Event-controlled analytics expiry tests freeze both deadline clocks so floating-point
+rounding cannot turn a valid query budget into a failed assertion.
+
 For scenario correctness tests, wait for the owned task to finish, including
 persistence and scheduler handoff. Use events to control concurrent steps and a
 finite test watchdog to detect deadlocks, not short per-step latency limits.
