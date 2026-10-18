@@ -8,6 +8,7 @@ Unit tests for NegationTrapConverter.
 import pytest
 
 from pyrit.converter import NegationTrapConverter
+from pyrit.registry import ConverterRegistry
 
 
 async def test_negation_trap_converter_initialization_with_defaults() -> None:
@@ -255,3 +256,43 @@ async def test_negation_trap_converter_default_template_constant() -> None:
     assert hasattr(NegationTrapConverter, "DEFAULT_TEMPLATE")
     assert "{prompt}" in NegationTrapConverter.DEFAULT_TEMPLATE
     assert "{wrong_value}" in NegationTrapConverter.DEFAULT_TEMPLATE
+
+
+def test_negation_trap_identifier_includes_settings() -> None:
+    """Test that the identifier carries the values that decide the converted prompt."""
+    template = "Is {prompt} equal to '{wrong_value}'?"
+    params = NegationTrapConverter(wrong_value="alpha", trap_template=template).get_identifier().params
+
+    assert params["wrong_value"] == "alpha"
+    assert params["trap_template"] == template
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        NegationTrapConverter(wrong_value="bravo"),
+        NegationTrapConverter(trap_template="Is {prompt} equal to '{wrong_value}'?"),
+    ],
+    ids=["wrong_value", "trap_template"],
+)
+def test_negation_trap_identifier_distinguishes_settings(other: NegationTrapConverter) -> None:
+    """Test that two traps that convert differently do not share an identifier."""
+    default = NegationTrapConverter()
+    assert default.get_identifier().hash != other.get_identifier().hash
+
+    # Both configurations get their own default registry name instead of colliding.
+    instances = ConverterRegistry().instances
+    instances.register(default)
+    instances.register(other)
+    assert instances.get(default.get_identifier().unique_name) is default
+    assert instances.get(other.get_identifier().unique_name) is other
+
+
+def test_negation_trap_identifier_is_stable_for_equal_settings() -> None:
+    """Test that equal configurations keep a single identifier."""
+    assert (
+        NegationTrapConverter(wrong_value="alpha").get_identifier().hash
+        == NegationTrapConverter(wrong_value="alpha", trap_template=NegationTrapConverter.DEFAULT_TEMPLATE)
+        .get_identifier()
+        .hash
+    )

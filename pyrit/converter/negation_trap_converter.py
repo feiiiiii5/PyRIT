@@ -4,7 +4,7 @@
 import asyncio
 
 from pyrit.converter.converter import Converter, ConverterResult
-from pyrit.models import PromptDataType
+from pyrit.models import ComponentIdentifier, PromptDataType
 
 
 class NegationTrapConverter(Converter):
@@ -57,6 +57,23 @@ class NegationTrapConverter(Converter):
             raise ValueError("trap_template must contain '{wrong_value}' placeholder")
         if "{prompt}" not in self.trap_template:
             raise ValueError("trap_template must contain '{prompt}' placeholder")
+
+    def _build_identifier(self) -> ComponentIdentifier:
+        """
+        Build identifier with the trap's configuration.
+
+        The trap value and template decide every converted prompt, so both are part of
+        the converter's identity rather than only of the output.
+
+        Returns:
+            ComponentIdentifier: The identifier for this converter.
+        """
+        return self._create_identifier(
+            params={
+                "wrong_value": self.wrong_value,
+                "trap_template": self.trap_template,
+            }
+        )
 
     async def convert_async(self, *, prompt: str, input_type: PromptDataType = "text") -> ConverterResult:
         """
