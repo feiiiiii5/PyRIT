@@ -142,6 +142,9 @@ class ImageCompressionConverter(Converter):
                 "compress_level": self._compress_level,
                 "lossless": self._lossless,
                 "method": self._method,
+                "background_color": self._background_color,
+                "min_compression_threshold": self._min_compression_threshold,
+                "fallback_to_original": self._fallback_to_original,
             }
         )
 
