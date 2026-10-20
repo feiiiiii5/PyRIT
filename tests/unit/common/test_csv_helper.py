@@ -4,7 +4,28 @@
 import io
 from io import StringIO
 
-from pyrit.common.csv_helper import read_csv, write_csv
+import pytest
+
+from pyrit.common.csv_helper import read_csv, strip_leading_comment_block, write_csv
+
+
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("leading_block", ["", "\n", " \t\n", "# metadata\n", "\n  # first\n\t\n# second\n"])
+def test_strip_leading_comment_block_preserves_body(*, line_ending: str, leading_block: str) -> None:
+    body = f'objective,assistant_response{line_ending}# objective,"line one\r\n### heading\rline three"{line_ending}'
+    text = leading_block.replace("\n", line_ending) + body
+    assert strip_leading_comment_block(text) == body
+
+
+@pytest.mark.parametrize("separator", ["\v", "\f", "\x85", "\u2028", "\u2029"])
+def test_strip_leading_comment_block_preserves_non_newline_separators(separator: str) -> None:
+    body = f"value{separator}# header\none\n"
+    assert strip_leading_comment_block("# metadata\n" + body) == body
+
+
+@pytest.mark.parametrize("text", ["", "\n\t\n", "# comment", "\r\n# comment\r\n \r"])
+def test_strip_leading_comment_block_without_content(text: str) -> None:
+    assert strip_leading_comment_block(text) == ""
 
 
 def test_read_csv_returns_list_of_dicts():

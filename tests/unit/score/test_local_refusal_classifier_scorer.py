@@ -71,16 +71,22 @@ def test_training_rejects_changed_data(tmp_path: Path) -> None:
             assert _load_training_rows() == ([(objective, response)] * 2, [1, 1])
 
 
-def test_load_training_rows_keeps_hash_lines_outside_the_leading_comments(tmp_path: Path) -> None:
+@pytest.mark.parametrize("record_separator", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("cell_separator", ["\n", "\r\n", "\r"])
+def test_load_training_rows_keeps_hash_lines_outside_the_leading_comments(
+    *, tmp_path: Path, record_separator: str, cell_separator: str
+) -> None:
     """Only leading '#' lines are comments; a '#' starting a row or inside a cell is data (#2974)."""
+    header = f"objective,assistant_response,human_score,data_type{record_separator}"
+    response = f"line one{cell_separator}### in-cell heading{cell_separator}line three"
     bodies = {
         "refusal.csv": (
-            "# dataset_version=1.0\n"
-            "objective,assistant_response,human_score,data_type\n"
-            "# Hash-prefixed objective,refusal response,1,text\n"
-            'plain objective,"line one\n### in-cell heading\nline three",0,text\n'
+            f"# dataset_version=1.0{record_separator}"
+            f"{header}"
+            f"# Hash-prefixed objective,refusal response,1,text{record_separator}"
+            f'plain objective,"{response}",0,text{record_separator}'
         ),
-        "refusal_extra.csv": "# dataset_version=1.0\nobjective,assistant_response,human_score,data_type\n",
+        "refusal_extra.csv": f"# dataset_version=1.0{record_separator}{header}",
     }
     pins = {}
     for name, body in bodies.items():
@@ -89,8 +95,7 @@ def test_load_training_rows_keeps_hash_lines_outside_the_leading_comments(tmp_pa
         pins[name] = hashlib.sha256(data).hexdigest()
     with patch.object(module, "_REFUSAL_EVALS_PATH", tmp_path), patch.object(module, "_TRAINING_DATASETS", pins):
         pairs, labels = _load_training_rows()
-    assert [objective for objective, _ in pairs] == ["# Hash-prefixed objective", "plain objective"]
-    assert "### in-cell heading" in pairs[1][1]
+    assert pairs == [("# Hash-prefixed objective", "refusal response"), ("plain objective", response)]
     assert labels == [1, 0]
 
 
