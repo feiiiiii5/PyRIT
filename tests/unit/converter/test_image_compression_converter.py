@@ -469,6 +469,16 @@ def test_image_compression_identifier_includes_output_settings() -> None:
     assert params["fallback_to_original"] is False
 
 
+def test_image_compression_identifier_keeps_default_hash() -> None:
+    converter = ImageCompressionConverter()
+    identifier = converter.get_identifier()
+    assert identifier.hash == "c41c060bb7d4f117cb7f98135413108d24656ad812e4916049bda7f7c4e9827d"
+
+    instances = ConverterRegistry().instances
+    instances.register(converter)
+    assert instances.get("ImageCompressionConverter::c41c060b") is converter
+
+
 def test_image_compression_identifier_is_stable_for_equal_settings() -> None:
     assert (
         ImageCompressionConverter().get_identifier().hash
