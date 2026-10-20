@@ -15,9 +15,10 @@ def strip_leading_comment_block(text: str) -> str:
     is preserved as data. Callers that hand the result to ``csv.DictReader`` must use
     this instead of dropping every "#" line, which silently deletes data.
 
-    Lines are read the way ``open(..., newline=None)`` reads them; a ``StringIO``
-    opened with the same newline setting keeps the block boundary identical to the
-    canonical scan instead of also splitting on separators such as "\\v".
+    Universal-newline mode still recognizes CR, LF and CRLF line boundaries, but
+    ``newline=""`` returns each ending untranslated. The returned text therefore keeps
+    the payload byte-for-byte, including CR and CRLF inside quoted cells, instead of
+    letting the scan rewrite what the CSV reader later parses.
 
     Args:
         text (str): The full CSV text.
@@ -25,7 +26,7 @@ def strip_leading_comment_block(text: str) -> str:
     Returns:
         str: The text from the first non-comment, non-blank line onward.
     """
-    stream = io.StringIO(text, newline=None)
+    stream = io.StringIO(text, newline="")
     remaining: list[str] = []
     for line in stream:
         stripped = line.strip()

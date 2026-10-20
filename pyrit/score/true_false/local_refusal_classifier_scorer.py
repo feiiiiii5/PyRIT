@@ -368,7 +368,7 @@ def _load_training_rows() -> tuple[list[tuple[str, str]], list[int]]:
             )
         text = raw.decode("utf-8", errors="replace")
         body = strip_leading_comment_block(text)
-        for row in csv.DictReader(io.StringIO(body)):
+        for row in csv.DictReader(io.StringIO(body, newline="")):
             if row.get("data_type", "text") != "text" or row["human_score"] not in ("0", "1"):
                 continue
             pairs.append((row["objective"], row["assistant_response"]))

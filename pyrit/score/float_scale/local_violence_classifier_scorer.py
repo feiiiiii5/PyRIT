@@ -309,7 +309,7 @@ def _load_training_rows() -> tuple[list[str], list[int]]:
                 "LocalViolenceClassifierScorer's pinned hashes rather than scoring with an unchecked model."
             )
         body = strip_leading_comment_block(raw.decode("utf-8"))
-        for row in csv.DictReader(io.StringIO(body)):
+        for row in csv.DictReader(io.StringIO(body, newline="")):
             raw_scores = [row.get(key) for key in ("human_score", "human_score_1", "human_score_2", "human_score_3")]
             scores = [float(value) for value in raw_scores if value not in (None, "")]
             response = (row.get("assistant_response") or "").strip()
