@@ -47,6 +47,8 @@ import {
 import { useConversationSave } from '@/hooks/useConversationSave'
 import { useConversationDraft } from '@/hooks/useConversationDraft'
 import { useConversationMessages } from '@/hooks/useConversationMessages'
+import { useAttackMutations } from '@/hooks/useAttackMutations'
+import { useConversationExport } from '@/hooks/useConversationExport'
 import type { PieceConversion } from './converterTypes'
 import { useChatConverters } from '@/hooks/useChatConverters'
 import { useRuntime } from '@/hooks/useRuntime'
@@ -64,15 +66,13 @@ import {
   withDraftIdentity,
 } from './converterTypes'
 import type { ChatInputAreaHandle } from './ChatInputArea'
-import { attacksApi, scoresApi } from '../../services/api'
+import { attacksApi } from '../../services/api'
 import { toApiError } from '../../services/errors'
 import {
   buildMessagePieces,
   backendMessageToOriginalDraft,
   backendMessagesToFrontend,
 } from '../../utils/messageMapper'
-import { exportConversation } from '../../utils/conversationExport'
-import type { ExportFormat } from '../../utils/conversationExport'
 import type {
   AddMessageResponse,
   AttackOutcome,
@@ -366,7 +366,6 @@ export default function ChatWindow({
   const navigate = useNavigate()
   const [isFindingDialogOpen, setIsFindingDialogOpen] = useState(false)
   const outcomeButtonRef = useRef<HTMLButtonElement>(null)
-  const [pendingObjective, setPendingObjective] = useState('')
   const [temperature, setTemperature] = useState('')
   const [temperatureExplanationAttackId, setTemperatureExplanationAttackId] = useState<string | null>(null)
   const [temperatureAttackId, setTemperatureAttackId] = useState(attackResultId)
@@ -374,7 +373,6 @@ export default function ChatWindow({
     setTemperatureAttackId(attackResultId)
     setTemperature('')
   }
-  const currentObjective = attackResultId ? objective : pendingObjective
   const runtime = useRuntime()
   const newAttackContext: NewAttackContext = {
     generation: runtime.generation, ready: runtime.ready && defaultsReady, labels, operationId,
@@ -411,8 +409,6 @@ export default function ChatWindow({
   const [sendingConversations, setSendingConversations] = useState<Set<string>>(new Set())
   const isSending = activeConversationId ? sendingConversations.has(activeConversationId) : Boolean(sendingConversations.size)
   const [isPanelOpen, setIsPanelOpen] = useState(false)
-  const [isExporting, setIsExporting] = useState(false)
-  const isExportingRef = useRef(false)
   const [isNarrowScreen, setIsNarrowScreen] = useState(matchesNarrowScreen)
   const [isConverterPanelOpen, setIsConverterPanelOpen] = useState(false)
   const launchStateRef = useRef({ generation: runtime.generation, ready: runtime.ready, defaultsReady })
@@ -625,6 +621,28 @@ export default function ChatWindow({
   )
   // Any failed invariant keeps all mutation controls and handlers read-only.
   const isMutationLocked = isOperatorLocked || isCrossTargetLocked || isTargetResolutionLocked || isEvidenceUnavailable
+  const isScoreLocked = isOperatorLocked || Boolean(isLoadingAttack) || isLoadingMessages
+    || awaitingConversationLoad || isEvidenceUnavailable
+  const {
+    pendingObjective,
+    currentObjective,
+    resetPendingObjective,
+    updateHumanScore,
+    removeHumanScore,
+    changeObjective,
+  } = useAttackMutations({
+    attackResultId,
+    activeConversationId,
+    objective,
+    lastResponseMessagePieceId,
+    humanScore,
+    isScoreLocked,
+    loadConversation,
+    getViewedConversationId,
+    onHumanScoreChange,
+    onAttackChange,
+    onObjectiveChange,
+  })
 
   // Clear internal messages when attack state is reset (e.g. New Attack).
   // Uses the "adjust state during render" pattern (see React docs:
@@ -637,7 +655,7 @@ export default function ChatWindow({
       setRecoverableSends({})
       resetConversationMessages()
       setSystemPrompt('')
-      setPendingObjective('')
+      resetPendingObjective()
     }
   }
 
@@ -648,8 +666,6 @@ export default function ChatWindow({
     setSystemPrompt('')
   }
 
-  const isScoreLocked = isOperatorLocked || Boolean(isLoadingAttack) || isLoadingMessages
-    || awaitingConversationLoad || isEvidenceUnavailable
   const isFindingActionDisabled = Boolean(editDraft !== null || !attackResultId || !activeConversationId
     || isEvidenceUnavailable || isLoadingAttack || isLoadingMessages || awaitingConversationLoad)
 
@@ -1443,70 +1459,13 @@ export default function ChatWindow({
     isMutationLocked,
   ])
 
-  const handleHumanScoreUpdate = useCallback(async (value: boolean, rationale: string): Promise<void> => {
-    if (
-      !attackResultId
-      || !lastResponseMessagePieceId
-      || !currentObjective.trim()
-      || isScoreLocked
-    ) {
-      return
-    }
-
-    const score = await scoresApi.createManualScore({
-      attack_result_id: attackResultId,
-      message_id: lastResponseMessagePieceId,
-      value,
-      rationale,
-      update_attack: true,
-    })
-    onHumanScoreChange?.(score, value ? 'success' : 'failure')
-    if (activeConversationId && getViewedConversationId() === activeConversationId) {
-      await loadConversation(attackResultId, activeConversationId)
-    }
-  }, [
-    activeConversationId,
-    attackResultId,
-    getViewedConversationId,
-    isScoreLocked,
-    lastResponseMessagePieceId,
-    loadConversation,
-    onHumanScoreChange,
-    currentObjective,
-  ])
-
-  const handleHumanScoreRemove = useCallback(async (): Promise<void> => {
-    if (!attackResultId || !humanScore || isScoreLocked) return
-
-    const attack = await attacksApi.removeHumanScore(attackResultId)
-    onHumanScoreChange?.(null, attack.outcome ?? 'undetermined')
-    if (activeConversationId && getViewedConversationId() === activeConversationId) {
-      await loadConversation(attackResultId, activeConversationId)
-    }
-  }, [
-    activeConversationId,
-    attackResultId,
-    getViewedConversationId,
-    humanScore,
-    isScoreLocked,
-    loadConversation,
-    onHumanScoreChange,
-  ])
-
   const handleAddObjective = useCallback(async (newObjective: string, expectedObjective: string): Promise<void> => {
     if (editDraft !== null) {
       setEditorObjective(newObjective)
       return
     }
-    if (!attackResultId) {
-      setPendingObjective(newObjective)
-      return
-    }
-
-    const updatedAttack = await attacksApi.updateAttack(attackResultId, { objective: newObjective, expected_objective: expectedObjective })
-    onAttackChange?.(updatedAttack)
-    onObjectiveChange?.(updatedAttack.objective)
-  }, [attackResultId, onAttackChange, onObjectiveChange, editDraft, setEditorObjective])
+    await changeObjective(newObjective, expectedObjective)
+  }, [changeObjective, editDraft, setEditorObjective])
 
   const beginEdit = async (
     target: TargetInstance | null = activeTarget,
@@ -1850,34 +1809,11 @@ export default function ChatWindow({
 
   const handleUseAsTemplate = (): void => { void beginEdit(defaultBranchTarget ?? activeTarget) }
 
-  // Export is available whenever there is a stable, viewable conversation:
-  // not while empty, loading, or mid-send. A lone system prompt (rendered only
-  // in the banner, not the chat body) does not count as an exportable message.
-  // Read-only / operator-lock / cross-target states do not block export.
-  const canExportConversation =
-    messages.some((message) => !message.isLoading && message.role !== 'system') &&
-    !isSending &&
-    !isLoadingAttack &&
-    !isLoadingMessages &&
-    !awaitingConversationLoad
-
-  const handleExport = async (format: ExportFormat) => {
-    // A ref, not the state flag: two clicks in the same tick would both read
-    // the pre-render value and start duplicate exports.
-    if (isExportingRef.current) {
-      return
-    }
-    isExportingRef.current = true
-    setIsExporting(true)
-    try {
-      await exportConversation({ messages, conversationId: activeConversationId ?? conversationId, format })
-    } catch (err) {
-      console.error('Failed to export conversation:', err)
-    } finally {
-      isExportingRef.current = false
-      setIsExporting(false)
-    }
-  }
+  const { canExport: canExportConversation, isExporting, exportAs } = useConversationExport({
+    messages,
+    conversationId: activeConversationId ?? conversationId,
+    blocked: isSending || Boolean(isLoadingAttack) || isLoadingMessages || awaitingConversationLoad,
+  })
 
   // Chat owns these handlers and states even when the layout hosts the controls.
   const toolbar = (
@@ -1981,16 +1917,16 @@ export default function ChatWindow({
           <MenuPopover>
             <MenuList>
               <MenuItem
-                onClick={() => handleExport('markdown')}
+                onClick={() => exportAs('markdown')}
                 disabled={isExporting}
                 data-testid="export-markdown-item"
               >
                 Export as Markdown (.md)
               </MenuItem>
-              <MenuItem onClick={() => handleExport('json')} disabled={isExporting} data-testid="export-json-item">
+              <MenuItem onClick={() => exportAs('json')} disabled={isExporting} data-testid="export-json-item">
                 Export as JSON (.json)
               </MenuItem>
-              <MenuItem onClick={() => handleExport('html')} disabled={isExporting} data-testid="export-html-item">
+              <MenuItem onClick={() => exportAs('html')} disabled={isExporting} data-testid="export-html-item">
                 Export as HTML (.html)
               </MenuItem>
             </MenuList>
@@ -2090,8 +2026,8 @@ export default function ChatWindow({
             && Boolean(humanScore)
             && !isScoreLocked
           }
-          onUpdateHumanScore={handleHumanScoreUpdate}
-          onRemoveHumanScore={handleHumanScoreRemove}
+          onUpdateHumanScore={updateHumanScore}
+          onRemoveHumanScore={removeHumanScore}
           canAdd={
             !isSavingEditor
             && !isLoadingAttack
