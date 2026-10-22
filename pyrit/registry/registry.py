@@ -964,20 +964,27 @@ class InstanceHoldingRegistry(Registry[InstanceT, MetadataT]):
             ValueError: If overrides are unknown or the source class is unavailable.
         """
         inputs = self.get_reconstruction_parameters(source)
-        unknown = set(params) - {
-            parameter.name
-            for parameter in derive_parameters(
-                cls=type(source),
-                identifier_type=self._identifier_type(),
-                seam_base_type=self._seam_base_type(),
-            )
-        }
+        raw_params = dict(params)
+        parameters = derive_parameters(
+            cls=type(source),
+            identifier_type=self._identifier_type(),
+            seam_base_type=self._seam_base_type(),
+        )
+        by_name = {parameter.name: parameter for parameter in parameters}
+        unknown = set(raw_params) - set(by_name)
         if unknown:
             raise ValueError(f"Unknown constructor parameters: {', '.join(sorted(unknown))}")
+        # An empty string is a cleared reference, not a value to look up. Resolving
+        # would drop the key, which lets the source input reappear in the merge
+        # below; remove it from the retained inputs so the constructor default
+        # (including an apply_defaults-registered one) applies instead.
+        cleared = {name for name, value in raw_params.items() if value == "" and by_name[name].reference is not None}
+        if cleared:
+            inputs = {name: value for name, value in inputs.items() if name not in cleared}
         if external_input:
-            params = resolve_constructor_args(
+            raw_params = resolve_constructor_args(
                 cls=type(source),
-                raw_args=dict(params),
+                raw_args=raw_params,
                 identifier_type=self._identifier_type(),
                 external_input=True,
                 seam_base_type=self._seam_base_type(),
@@ -987,7 +994,7 @@ class InstanceHoldingRegistry(Registry[InstanceT, MetadataT]):
             names = sorted(name for name, cls in self._classes.items() if cls is type(source))
         if not names:
             raise ValueError("The source component's class is no longer registered")
-        instance = self.create_instance(names[0], **{**inputs, **params})
+        instance = self.create_instance(names[0], **{**inputs, **raw_params})
         if isinstance(instance, ReconstructionContext):
             instance.attach_reconstruction_source(source)
         return instance
