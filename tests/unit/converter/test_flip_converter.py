@@ -68,3 +68,26 @@ async def test_flip_converter_input_not_supported():
     converter = FlipConverter()
     with pytest.raises(ValueError):
         await converter.convert_async(prompt="hello", input_type="image_path")
+
+
+async def test_flip_converter_double_flip_is_identity_for_indic_conjuncts() -> None:
+    converter = FlipConverter()
+    once = await converter.convert_async(prompt="\u0915\u094d\u0937\u092e\u093e")
+    twice = await converter.convert_async(prompt=once.output_text)
+
+    assert twice.output_text == "\u0915\u094d\u0937\u092e\u093e"
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "\U0001f1ee\U0001f1f3\U0001f1fa\U0001f1f8\U0001f1eb",
+        "\u0301abc",
+    ],
+)
+async def test_flip_converter_is_not_involutive_when_reversed_clusters_resegment(prompt: str) -> None:
+    converter = FlipConverter()
+    once = await converter.convert_async(prompt=prompt)
+    twice = await converter.convert_async(prompt=once.output_text)
+
+    assert twice.output_text != prompt
